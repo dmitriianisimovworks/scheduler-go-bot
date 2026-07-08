@@ -51,6 +51,9 @@ type Bot struct {
 	btnDur30         tele.Btn
 	btnDur60         tele.Btn
 	btnDur90         tele.Btn
+	btnTimePick      tele.Btn
+	btnTimeOther     tele.Btn
+	btnNoParticipant tele.Btn
 	btnCancelPick    tele.Btn
 	mainMenuKeyboard *tele.ReplyMarkup
 }
@@ -142,6 +145,9 @@ func (b *Bot) initButtons() {
 	b.btnDur30 = tele.Btn{Unique: "meeting_dur_30", Text: "30 мин"}
 	b.btnDur60 = tele.Btn{Unique: "meeting_dur_60", Text: "1 час"}
 	b.btnDur90 = tele.Btn{Unique: "meeting_dur_90", Text: "1.5 часа"}
+	b.btnTimePick = tele.Btn{Unique: "meeting_time_pick"}
+	b.btnTimeOther = tele.Btn{Unique: "meeting_time_other", Text: "✏️ Другое время"}
+	b.btnNoParticipant = tele.Btn{Unique: "meeting_participants_skip", Text: "Без участников"}
 	b.btnCancelPick = tele.Btn{Unique: "cancel_meeting_btn"}
 
 	menu := &tele.ReplyMarkup{
@@ -186,6 +192,9 @@ func (b *Bot) registerHandlers() {
 	b.bot.Handle(&b.btnDur30, b.handleMeetingDuration(30*time.Minute))
 	b.bot.Handle(&b.btnDur60, b.handleMeetingDuration(60*time.Minute))
 	b.bot.Handle(&b.btnDur90, b.handleMeetingDuration(90*time.Minute))
+	b.bot.Handle(&b.btnTimePick, b.handleMeetingTimePick)
+	b.bot.Handle(&b.btnTimeOther, b.handleMeetingTimeOther)
+	b.bot.Handle(&b.btnNoParticipant, b.handleNoParticipants)
 	b.bot.Handle(&b.btnCancelPick, b.handleCancelMeetingPick)
 
 	b.bot.Handle(tele.OnText, b.handleText)

@@ -24,6 +24,12 @@ const (
 	draftStepParticipants = "participants"
 )
 
+const (
+	workdayStartHour = 9
+	workdayEndHour   = 19
+	timeSlotStep     = 30 * time.Minute
+)
+
 type meetingDraft struct {
 	step     string
 	title    string
@@ -97,7 +103,7 @@ func (b *Bot) handleMeetingDraftText(c tele.Context, user domain.User, draft *me
 		}
 		draft.date = date
 		draft.step = draftStepTime
-		return c.Send("🕐 Время начала? Формат ЧЧ:ММ, например 14:30.")
+		return b.askMeetingTime(c)
 	case draftStepTime:
 		hour, minute, err := parseMeetingTime(text)
 		if err != nil {
@@ -134,6 +140,38 @@ func (b *Bot) askMeetingDuration(c tele.Context) error {
 	return c.Send("⏱ Сколько по времени?", markup)
 }
 
+func (b *Bot) askMeetingTime(c tele.Context) error {
+	markup := &tele.ReplyMarkup{}
+	slots := timeSlots()
+
+	rows := make([]tele.Row, 0, len(slots)/3+2)
+	for i := 0; i < len(slots); i += 3 {
+		end := min(i+3, len(slots))
+		var buttons []tele.Btn
+		for _, slot := range slots[i:end] {
+			buttons = append(buttons, markup.Data(slot, b.btnTimePick.Unique, slot))
+		}
+		rows = append(rows, markup.Row(buttons...))
+	}
+	rows = append(rows, markup.Row(b.btnTimeOther))
+	markup.Inline(rows...)
+
+	return c.Send("🕐 Время начала?", markup)
+}
+
+func timeSlots() []string {
+	var slots []string
+	for h := workdayStartHour; h <= workdayEndHour; h++ {
+		for m := 0; m < 60; m += int(timeSlotStep / time.Minute) {
+			if h == workdayEndHour && m > 0 {
+				break
+			}
+			slots = append(slots, fmt.Sprintf("%02d:%02d", h, m))
+		}
+	}
+	return slots
+}
+
 func (b *Bot) handleMeetingDateToday(c tele.Context) error {
 	defer c.Respond()
 	return b.setMeetingDate(c, "сегодня")
@@ -160,12 +198,37 @@ func (b *Bot) setMeetingDate(c tele.Context, text string) error {
 	}
 	draft.date = date
 	draft.step = draftStepTime
-	return c.Send("🕐 Время начала? Формат ЧЧ:ММ, например 14:30.")
+	return b.askMeetingTime(c)
 }
 
 func (b *Bot) handleMeetingDateOther(c tele.Context) error {
 	defer c.Respond()
 	return c.Send("Напишите дату в формате ДД.ММ или ДД.ММ.ГГГГ.")
+}
+
+func (b *Bot) handleMeetingTimePick(c tele.Context) error {
+	defer c.Respond()
+	user, err := b.currentUser(c)
+	if err != nil {
+		return err
+	}
+	draft, ok := b.getDraft(user.TelegramID)
+	if !ok || draft.step != draftStepTime {
+		return nil
+	}
+	hour, minute, err := parseMeetingTime(c.Data())
+	if err != nil {
+		return c.Send("Не понял время.")
+	}
+	loc := b.userLocation(user)
+	draft.startsAt = time.Date(draft.date.Year(), draft.date.Month(), draft.date.Day(), hour, minute, 0, 0, loc)
+	draft.step = draftStepDuration
+	return b.askMeetingDuration(c)
+}
+
+func (b *Bot) handleMeetingTimeOther(c tele.Context) error {
+	defer c.Respond()
+	return c.Send("Напишите время в формате ЧЧ:ММ, например 14:30.")
 }
 
 func (b *Bot) handleMeetingDuration(duration time.Duration) tele.HandlerFunc {
@@ -181,8 +244,27 @@ func (b *Bot) handleMeetingDuration(duration time.Duration) tele.HandlerFunc {
 		}
 		draft.duration = duration
 		draft.step = draftStepParticipants
-		return c.Send("👥 Кто участвует? Напишите Telegram-юзернеймы через запятую (без @), например: ivan, maria.\n\nЕсли участников кроме вас нет, напишите «-».")
+		return b.askMeetingParticipants(c)
 	}
+}
+
+func (b *Bot) askMeetingParticipants(c tele.Context) error {
+	markup := &tele.ReplyMarkup{}
+	markup.Inline(markup.Row(b.btnNoParticipant))
+	return c.Send("👥 Кто участвует? Напишите Telegram-юзернеймы через запятую (без @), например: ivan, maria.\n\nИли нажмите кнопку, если участников кроме вас нет.", markup)
+}
+
+func (b *Bot) handleNoParticipants(c tele.Context) error {
+	defer c.Respond()
+	user, err := b.currentUser(c)
+	if err != nil {
+		return err
+	}
+	draft, ok := b.getDraft(user.TelegramID)
+	if !ok || draft.step != draftStepParticipants {
+		return nil
+	}
+	return b.finishMeetingDraft(c, user, draft, "-")
 }
 
 func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetingDraft, participantsText string) error {

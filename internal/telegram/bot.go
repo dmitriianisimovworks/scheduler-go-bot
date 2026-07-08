@@ -73,15 +73,16 @@ func New(
 	users repository.UserRepository,
 	meetings repository.MeetingRepository,
 	_ *sheets.Client,
+	calendarClient usecase.CalendarClient,
 ) *Bot {
 	b := &Bot{
 		config:         cfg,
 		logger:         log,
 		users:          users,
 		clock:          clk,
-		createMeeting:  usecase.NewCreateMeeting(meetings),
+		createMeeting:  usecase.NewCreateMeeting(meetings, calendarClient),
 		listMyMeetings: usecase.NewListMyMeetings(meetings),
-		cancelMeeting:  usecase.NewCancelMeeting(meetings),
+		cancelMeeting:  usecase.NewCancelMeeting(meetings, calendarClient),
 		drafts:         make(map[int64]*meetingDraft),
 	}
 	b.initButtons()

@@ -5,6 +5,7 @@ import (
 
 	"meeting-bot/internal/config"
 	apphttp "meeting-bot/internal/http"
+	"meeting-bot/internal/integrations/calendar"
 	"meeting-bot/internal/integrations/sheets"
 	"meeting-bot/internal/platform/clock"
 	"meeting-bot/internal/platform/logger"
@@ -32,7 +33,8 @@ func buildContainer() (*App, error) {
 		return nil, err
 	}
 	sheetsClient := sheets.New(cfg)
-	tg := telegram.New(cfg, log, clk, repo, repo, sheetsClient)
+	calendarClient := calendar.New(cfg)
+	tg := telegram.New(cfg, log, clk, repo, repo, sheetsClient, calendarClient)
 	httpServer := apphttp.NewServer(cfg, log, tg)
 
 	return &App{

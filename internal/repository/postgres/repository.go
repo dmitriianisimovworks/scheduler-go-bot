@@ -111,6 +111,8 @@ func (r *Repository) ensureSchema(ctx context.Context) error {
 			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			PRIMARY KEY (meeting_id, user_id)
 		)`,
+		`ALTER TABLE meetings ADD COLUMN IF NOT EXISTS google_event_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE meetings ADD COLUMN IF NOT EXISTS meet_link TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_meetings_starts_at ON meetings (starts_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_meetings_ends_at ON meetings (ends_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_meeting_participants_user_id ON meeting_participants (user_id)`,
@@ -287,10 +289,10 @@ func (r *Repository) Create(ctx context.Context, meeting domain.Meeting) (domain
 	defer tx.Rollback()
 
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO meetings (title, creator_id, starts_at, ends_at)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO meetings (title, creator_id, starts_at, ends_at, google_event_id, meet_link)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id
-	`, meeting.Title, meeting.CreatorID, meeting.StartsAt, meeting.EndsAt).Scan(&meeting.ID)
+	`, meeting.Title, meeting.CreatorID, meeting.StartsAt, meeting.EndsAt, meeting.GoogleEventID, meeting.MeetLink).Scan(&meeting.ID)
 	if err != nil {
 		return domain.Meeting{}, err
 	}
@@ -314,7 +316,7 @@ func (r *Repository) Create(ctx context.Context, meeting domain.Meeting) (domain
 
 func (r *Repository) ListUpcomingForUser(ctx context.Context, userID int64, from time.Time, limit int) ([]domain.Meeting, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, title, creator_id, starts_at, ends_at
+		SELECT id, title, creator_id, starts_at, ends_at, google_event_id, meet_link
 		FROM meetings
 		WHERE starts_at >= $1
 		AND (
@@ -339,7 +341,7 @@ func (r *Repository) scanMeetings(ctx context.Context, rows *sql.Rows) ([]domain
 	var meetings []domain.Meeting
 	for rows.Next() {
 		var meeting domain.Meeting
-		if err := rows.Scan(&meeting.ID, &meeting.Title, &meeting.CreatorID, &meeting.StartsAt, &meeting.EndsAt); err != nil {
+		if err := rows.Scan(&meeting.ID, &meeting.Title, &meeting.CreatorID, &meeting.StartsAt, &meeting.EndsAt, &meeting.GoogleEventID, &meeting.MeetLink); err != nil {
 			return nil, err
 		}
 		meetings = append(meetings, meeting)
@@ -377,19 +379,16 @@ func (r *Repository) participantIDs(ctx context.Context, meetingID int64) ([]int
 	return ids, rows.Err()
 }
 
-func (r *Repository) Cancel(ctx context.Context, meetingID int64, requesterID int64) error {
-	result, err := r.db.ExecContext(ctx, `DELETE FROM meetings WHERE id = $1 AND creator_id = $2`, meetingID, requesterID)
+func (r *Repository) Cancel(ctx context.Context, meetingID int64, requesterID int64) (domain.Meeting, error) {
+	var meeting domain.Meeting
+	err := r.db.QueryRowContext(ctx, `
+		DELETE FROM meetings WHERE id = $1 AND creator_id = $2
+		RETURNING id, title, creator_id, starts_at, ends_at, google_event_id, meet_link
+	`, meetingID, requesterID).Scan(&meeting.ID, &meeting.Title, &meeting.CreatorID, &meeting.StartsAt, &meeting.EndsAt, &meeting.GoogleEventID, &meeting.MeetLink)
 	if err != nil {
-		return err
+		return domain.Meeting{}, err
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return meeting, nil
 }
 
 func (r *Repository) HasConflict(ctx context.Context, participantIDs []int64, startsAt time.Time, endsAt time.Time) (bool, error) {

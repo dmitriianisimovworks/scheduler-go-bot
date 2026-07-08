@@ -14,11 +14,12 @@ var ErrConflict = errors.New("meeting conflicts with existing schedule")
 var ErrPastTime = errors.New("meeting start time is in the past")
 
 type CreateMeeting struct {
-	repo repository.MeetingRepository
+	repo     repository.MeetingRepository
+	calendar CalendarClient
 }
 
-func NewCreateMeeting(repo repository.MeetingRepository) CreateMeeting {
-	return CreateMeeting{repo: repo}
+func NewCreateMeeting(repo repository.MeetingRepository, calendar CalendarClient) CreateMeeting {
+	return CreateMeeting{repo: repo, calendar: calendar}
 }
 
 type CreateMeetingInput struct {
@@ -57,5 +58,19 @@ func (uc CreateMeeting) Execute(ctx context.Context, input CreateMeetingInput) (
 		StartsAt:       input.StartsAt,
 		EndsAt:         input.EndsAt,
 	}
+
+	if uc.calendar != nil && uc.calendar.Enabled() {
+		event, err := uc.calendar.CreateEvent(ctx, CalendarEventInput{
+			Title:    input.Title,
+			StartsAt: input.StartsAt,
+			EndsAt:   input.EndsAt,
+		})
+		if err != nil {
+			return domain.Meeting{}, err
+		}
+		meeting.GoogleEventID = event.EventID
+		meeting.MeetLink = event.MeetLink
+	}
+
 	return uc.repo.Create(ctx, meeting)
 }

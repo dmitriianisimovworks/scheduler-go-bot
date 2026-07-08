@@ -543,6 +543,9 @@ func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetin
 	} else {
 		summary += "\n\n👥 Участники: только вы"
 	}
+	if meeting.MeetLink != "" {
+		summary += fmt.Sprintf("\n\n🔗 Google Meet: %s", meeting.MeetLink)
+	}
 
 	if err := c.Send(summary); err != nil {
 		return err
@@ -626,6 +629,31 @@ func (b *Bot) renderMyMeetings(c tele.Context, user domain.User) error {
 }
 
 func (b *Bot) handleMyMeetingInfo(c tele.Context) error {
+	meetingID, err := strconv.ParseInt(c.Data(), 10, 64)
+	if err != nil {
+		return c.Respond()
+	}
+
+	user, err := b.currentUser(c)
+	if err != nil {
+		return c.Respond()
+	}
+
+	meetings, err := b.listMyMeetings.Execute(context.Background(), user.ID, b.clock.Now())
+	if err != nil {
+		return c.Respond()
+	}
+
+	for _, meeting := range meetings {
+		if meeting.ID != meetingID {
+			continue
+		}
+		if meeting.MeetLink == "" {
+			return c.RespondText("Без Google Meet")
+		}
+		return c.RespondAlert("Google Meet:\n" + meeting.MeetLink)
+	}
+
 	return c.Respond()
 }
 

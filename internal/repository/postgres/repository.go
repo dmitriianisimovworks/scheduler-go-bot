@@ -299,22 +299,6 @@ func (r *Repository) Create(ctx context.Context, meeting domain.Meeting) (domain
 	return meeting, nil
 }
 
-func (r *Repository) ListUpcomingByCreator(ctx context.Context, creatorID int64, from time.Time, limit int) ([]domain.Meeting, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, title, creator_id, starts_at, ends_at
-		FROM meetings
-		WHERE creator_id = $1 AND starts_at >= $2
-		ORDER BY starts_at
-		LIMIT $3
-	`, creatorID, from, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return r.scanMeetings(ctx, rows)
-}
-
 func (r *Repository) ListUpcomingForUser(ctx context.Context, userID int64, from time.Time, limit int) ([]domain.Meeting, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, title, creator_id, starts_at, ends_at

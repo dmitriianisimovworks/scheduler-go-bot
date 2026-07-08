@@ -26,7 +26,6 @@ type Bot struct {
 	bot    *tele.Bot
 
 	createMeeting  usecase.CreateMeeting
-	listUpcoming   usecase.ListUpcoming
 	listMyMeetings usecase.ListMyMeetings
 	cancelMeeting  usecase.CancelMeeting
 
@@ -56,7 +55,12 @@ type Bot struct {
 	btnTimePick      tele.Btn
 	btnTimeOther     tele.Btn
 	btnNoParticipant tele.Btn
-	btnCancelPick    tele.Btn
+
+	btnMyMeetingInfo          tele.Btn
+	btnMyMeetingCancelAsk     tele.Btn
+	btnMyMeetingCancelConfirm tele.Btn
+	btnMyMeetingCancelDecline tele.Btn
+
 	mainMenuKeyboard *tele.ReplyMarkup
 }
 
@@ -74,7 +78,6 @@ func New(
 		users:          users,
 		clock:          clk,
 		createMeeting:  usecase.NewCreateMeeting(meetings),
-		listUpcoming:   usecase.NewListUpcoming(meetings),
 		listMyMeetings: usecase.NewListMyMeetings(meetings),
 		cancelMeeting:  usecase.NewCancelMeeting(meetings),
 		drafts:         make(map[int64]*meetingDraft),
@@ -152,7 +155,10 @@ func (b *Bot) initButtons() {
 	b.btnTimePick = tele.Btn{Unique: "meeting_time_pick"}
 	b.btnTimeOther = tele.Btn{Unique: "meeting_time_other", Text: "✏️ Другое время"}
 	b.btnNoParticipant = tele.Btn{Unique: "meeting_participants_skip", Text: "Без участников"}
-	b.btnCancelPick = tele.Btn{Unique: "cancel_meeting_btn"}
+	b.btnMyMeetingInfo = tele.Btn{Unique: "my_meeting_info"}
+	b.btnMyMeetingCancelAsk = tele.Btn{Unique: "my_meeting_cancel_ask", Text: "✕"}
+	b.btnMyMeetingCancelConfirm = tele.Btn{Unique: "my_meeting_cancel_confirm", Text: "✅ Да, отменить"}
+	b.btnMyMeetingCancelDecline = tele.Btn{Unique: "my_meeting_cancel_decline", Text: "Отмена"}
 
 	menu := &tele.ReplyMarkup{
 		ResizeKeyboard: true,
@@ -160,8 +166,7 @@ func (b *Bot) initButtons() {
 	}
 	menu.Reply(
 		menu.Row(menu.Text("➕ Создать встречу"), menu.Text("📋 Мои встречи")),
-		menu.Row(menu.Text("👤 Профиль"), menu.Text("🗑 Отменить встречу")),
-		menu.Row(menu.Text("❓ Помощь")),
+		menu.Row(menu.Text("👤 Профиль"), menu.Text("❓ Помощь")),
 	)
 	b.mainMenuKeyboard = menu
 }
@@ -175,7 +180,6 @@ func (b *Bot) registerHandlers() {
 	b.bot.Handle("❓ Помощь", b.handleHelp)
 	b.bot.Handle("📋 Мои встречи", b.handleMyMeetings)
 	b.bot.Handle("➕ Создать встречу", b.handleCreateMeetingStart)
-	b.bot.Handle("🗑 Отменить встречу", b.handleCancelMeetingStart)
 
 	b.bot.Handle(&b.btnUseName, b.handleUseTelegramName)
 	b.bot.Handle(&b.btnEnterName, b.handleEnterName)
@@ -201,7 +205,10 @@ func (b *Bot) registerHandlers() {
 	b.bot.Handle(&b.btnTimePick, b.handleMeetingTimePick)
 	b.bot.Handle(&b.btnTimeOther, b.handleMeetingTimeOther)
 	b.bot.Handle(&b.btnNoParticipant, b.handleNoParticipants)
-	b.bot.Handle(&b.btnCancelPick, b.handleCancelMeetingPick)
+	b.bot.Handle(&b.btnMyMeetingInfo, b.handleMyMeetingInfo)
+	b.bot.Handle(&b.btnMyMeetingCancelAsk, b.handleMyMeetingCancelAsk)
+	b.bot.Handle(&b.btnMyMeetingCancelConfirm, b.handleMyMeetingCancelConfirm)
+	b.bot.Handle(&b.btnMyMeetingCancelDecline, b.handleMyMeetingCancelDecline)
 
 	b.bot.Handle(tele.OnText, b.handleText)
 }
@@ -495,13 +502,7 @@ func (b *Bot) handleMyMeetings(c tele.Context) error {
 	if err != nil {
 		return b.handleStart(c)
 	}
-	loc := b.userLocation(user)
-
-	meetings, err := b.listMyMeetings.Execute(context.Background(), user.ID, b.clock.Now())
-	if err != nil {
-		return err
-	}
-	return c.Send(formatMeetingsList("📋 Мои ближайшие встречи", meetings, loc, "Предстоящих встреч нет."), b.mainMenuKeyboard)
+	return b.renderMyMeetings(c, user)
 }
 
 func (b *Bot) handleHelp(c tele.Context) error {

@@ -569,41 +569,64 @@ func parseMeetingTime(text string) (hour int, minute int, err error) {
 	return hour, minute, nil
 }
 
-func (b *Bot) handleCancelMeetingStart(c tele.Context) error {
-	user, err := b.currentUser(c)
-	if err != nil {
-		return b.handleStart(c)
-	}
-	if !user.IsRegistered() {
-		return b.sendMainMenu(c, user)
-	}
-
+func (b *Bot) renderMyMeetings(c tele.Context, user domain.User) error {
 	loc := b.userLocation(user)
-	meetings, err := b.listUpcoming.Execute(context.Background(), user.ID, b.clock.Now())
+	meetings, err := b.listMyMeetings.Execute(context.Background(), user.ID, b.clock.Now())
 	if err != nil {
 		return err
 	}
 	if len(meetings) == 0 {
-		return c.Send("У вас нет предстоящих встреч для отмены.", b.mainMenuKeyboard)
+		return c.Send("📋 Предстоящих встреч нет.", b.mainMenuKeyboard)
 	}
+
+	sort.Slice(meetings, func(i, j int) bool {
+		return meetings[i].StartsAt.Before(meetings[j].StartsAt)
+	})
 
 	markup := &tele.ReplyMarkup{}
 	rows := make([]tele.Row, 0, len(meetings))
 	for _, meeting := range meetings {
 		label := fmt.Sprintf(
-			"%s — %s",
+			"%s–%s — %s",
 			meeting.StartsAt.In(loc).Format("02.01 15:04"),
+			meeting.EndsAt.In(loc).Format("15:04"),
 			meeting.Title,
 		)
-		btn := markup.Data(label, b.btnCancelPick.Unique, strconv.FormatInt(meeting.ID, 10))
-		rows = append(rows, markup.Row(btn))
+		infoBtn := markup.Data(label, b.btnMyMeetingInfo.Unique, strconv.FormatInt(meeting.ID, 10))
+		if meeting.CreatorID == user.ID {
+			cancelBtn := markup.Data("✕", b.btnMyMeetingCancelAsk.Unique, strconv.FormatInt(meeting.ID, 10))
+			rows = append(rows, markup.Row(infoBtn, cancelBtn))
+		} else {
+			rows = append(rows, markup.Row(infoBtn))
+		}
 	}
 	markup.Inline(rows...)
 
-	return c.Send("🗑 Выберите встречу для отмены:", markup)
+	return c.EditOrSend("📋 Мои ближайшие встречи:", markup)
 }
 
-func (b *Bot) handleCancelMeetingPick(c tele.Context) error {
+func (b *Bot) handleMyMeetingInfo(c tele.Context) error {
+	return c.Respond()
+}
+
+func (b *Bot) handleMyMeetingCancelAsk(c tele.Context) error {
+	defer c.Respond()
+
+	if _, err := strconv.ParseInt(c.Data(), 10, 64); err != nil {
+		return c.RespondText("Не понял, какую встречу отменить")
+	}
+
+	markup := &tele.ReplyMarkup{}
+	markup.Inline(
+		markup.Row(
+			markup.Data("✅ Да, отменить", b.btnMyMeetingCancelConfirm.Unique, c.Data()),
+			markup.Data("Отмена", b.btnMyMeetingCancelDecline.Unique, c.Data()),
+		),
+	)
+	return c.Edit("❓ Точно отменить эту встречу?", markup)
+}
+
+func (b *Bot) handleMyMeetingCancelConfirm(c tele.Context) error {
 	defer c.Respond()
 
 	user, err := b.currentUser(c)
@@ -618,36 +641,26 @@ func (b *Bot) handleCancelMeetingPick(c tele.Context) error {
 
 	if err := b.cancelMeeting.Execute(context.Background(), meetingID, user.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return c.Edit("Эту встречу уже нельзя отменить: не найдена или вы не создатель.")
+			if editErr := c.Edit("Эту встречу уже нельзя отменить: не найдена или вы не создатель."); editErr != nil {
+				return editErr
+			}
+			return b.sendMainMenu(c, user)
 		}
 		return err
 	}
 
-	return c.Edit("✅ Встреча отменена.")
+	if err := c.Edit("✅ Встреча отменена."); err != nil {
+		return err
+	}
+	return b.sendMainMenu(c, user)
 }
 
-func formatMeetingsList(header string, meetings []domain.Meeting, loc *time.Location, emptyText string) string {
-	if len(meetings) == 0 {
-		return fmt.Sprintf("%s\n\n%s", header, emptyText)
+func (b *Bot) handleMyMeetingCancelDecline(c tele.Context) error {
+	defer c.Respond()
+
+	user, err := b.currentUser(c)
+	if err != nil {
+		return err
 	}
-
-	sort.Slice(meetings, func(i, j int) bool {
-		return meetings[i].StartsAt.Before(meetings[j].StartsAt)
-	})
-
-	var lines []string
-	for _, meeting := range meetings {
-		line := fmt.Sprintf(
-			"%s–%s — %s",
-			meeting.StartsAt.In(loc).Format("02.01 15:04"),
-			meeting.EndsAt.In(loc).Format("15:04"),
-			meeting.Title,
-		)
-		if participants := len(meeting.ParticipantIDs); participants > 0 {
-			line += fmt.Sprintf(" (участников: %d)", participants+1)
-		}
-		lines = append(lines, line)
-	}
-
-	return fmt.Sprintf("%s\n\n%s", header, strings.Join(lines, "\n"))
+	return b.renderMyMeetings(c, user)
 }

@@ -1,6 +1,8 @@
 package telegram
 
 import (
+	"context"
+
 	"meeting-bot/internal/config"
 	"meeting-bot/internal/integrations/sheets"
 	"meeting-bot/internal/platform/clock"
@@ -22,6 +24,7 @@ func New(
 	return &Bot{config: cfg}
 }
 
-func (b *Bot) Run() error {
+func (b *Bot) Run(ctx context.Context) error {
+	<-ctx.Done()
 	return nil
 }

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+
 	"meeting-bot/internal/config"
 	apphttp "meeting-bot/internal/http"
 	"meeting-bot/internal/integrations/sheets"
@@ -12,10 +14,11 @@ import (
 
 type HTTPServer interface {
 	Start() error
+	Shutdown(ctx context.Context) error
 }
 
 type TelegramRunner interface {
-	Run() error
+	Run(ctx context.Context) error
 }
 
 func buildContainer() (*App, error) {

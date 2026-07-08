@@ -32,7 +32,7 @@ func buildContainer() (*App, error) {
 		return nil, err
 	}
 	sheetsClient := sheets.New(cfg)
-	tg := telegram.New(cfg, log, clk, repo, sheetsClient)
+	tg := telegram.New(cfg, log, clk, repo, repo, sheetsClient)
 	httpServer := apphttp.NewServer(cfg, log, tg)
 
 	return &App{

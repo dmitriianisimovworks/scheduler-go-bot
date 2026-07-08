@@ -185,6 +185,16 @@ func (r *Repository) GetByTelegramID(ctx context.Context, telegramID int64) (dom
 	return scanUser(row)
 }
 
+func (r *Repository) GetByUsername(ctx context.Context, username string) (domain.User, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, telegram_id, username, first_name, last_name, full_name, display_name, team, role, timezone, registration_step, registered_at, last_seen_at
+		FROM users
+		WHERE lower(username) = lower($1)
+	`, username)
+
+	return scanUser(row)
+}
+
 func (r *Repository) SetRegistrationStep(ctx context.Context, telegramID int64, step string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE users
@@ -256,22 +266,155 @@ func scanUser(row scanner) (domain.User, error) {
 	return user, nil
 }
 
-func (r *Repository) Create(_ context.Context, meeting domain.Meeting) (domain.Meeting, error) {
+func (r *Repository) Create(ctx context.Context, meeting domain.Meeting) (domain.Meeting, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Meeting{}, err
+	}
+	defer tx.Rollback()
+
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO meetings (title, creator_id, starts_at, ends_at)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`, meeting.Title, meeting.CreatorID, meeting.StartsAt, meeting.EndsAt).Scan(&meeting.ID)
+	if err != nil {
+		return domain.Meeting{}, err
+	}
+
+	for _, participantID := range meeting.ParticipantIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO meeting_participants (meeting_id, user_id)
+			VALUES ($1, $2)
+			ON CONFLICT DO NOTHING
+		`, meeting.ID, participantID); err != nil {
+			return domain.Meeting{}, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return domain.Meeting{}, err
+	}
+
 	return meeting, nil
 }
 
-func (r *Repository) ListByDay(_ context.Context, _ time.Time) ([]domain.Meeting, error) {
-	return nil, nil
+func (r *Repository) ListByDay(ctx context.Context, day time.Time) ([]domain.Meeting, error) {
+	return r.listRange(ctx, day, day.Add(24*time.Hour))
 }
 
-func (r *Repository) ListByWeek(_ context.Context, _ time.Time) ([]domain.Meeting, error) {
-	return nil, nil
+func (r *Repository) ListByWeek(ctx context.Context, day time.Time) ([]domain.Meeting, error) {
+	return r.listRange(ctx, day, day.Add(7*24*time.Hour))
 }
 
-func (r *Repository) Cancel(_ context.Context, _ int64, _ int64) error {
+func (r *Repository) listRange(ctx context.Context, from, to time.Time) ([]domain.Meeting, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, title, creator_id, starts_at, ends_at
+		FROM meetings
+		WHERE starts_at < $2 AND ends_at > $1
+		ORDER BY starts_at
+	`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return r.scanMeetings(ctx, rows)
+}
+
+func (r *Repository) ListUpcomingByCreator(ctx context.Context, creatorID int64, from time.Time, limit int) ([]domain.Meeting, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, title, creator_id, starts_at, ends_at
+		FROM meetings
+		WHERE creator_id = $1 AND starts_at >= $2
+		ORDER BY starts_at
+		LIMIT $3
+	`, creatorID, from, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return r.scanMeetings(ctx, rows)
+}
+
+func (r *Repository) scanMeetings(ctx context.Context, rows *sql.Rows) ([]domain.Meeting, error) {
+	var meetings []domain.Meeting
+	for rows.Next() {
+		var meeting domain.Meeting
+		if err := rows.Scan(&meeting.ID, &meeting.Title, &meeting.CreatorID, &meeting.StartsAt, &meeting.EndsAt); err != nil {
+			return nil, err
+		}
+		meetings = append(meetings, meeting)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range meetings {
+		participantIDs, err := r.participantIDs(ctx, meetings[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		meetings[i].ParticipantIDs = participantIDs
+	}
+
+	return meetings, nil
+}
+
+func (r *Repository) participantIDs(ctx context.Context, meetingID int64) ([]int64, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT user_id FROM meeting_participants WHERE meeting_id = $1`, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (r *Repository) Cancel(ctx context.Context, meetingID int64, requesterID int64) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM meetings WHERE id = $1 AND creator_id = $2`, meetingID, requesterID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
 	return nil
 }
 
-func (r *Repository) HasConflict(_ context.Context, _ []int64, _ time.Time, _ time.Time) (bool, error) {
-	return false, nil
+func (r *Repository) HasConflict(ctx context.Context, participantIDs []int64, startsAt time.Time, endsAt time.Time) (bool, error) {
+	if len(participantIDs) == 0 {
+		return false, nil
+	}
+
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM meetings m
+			WHERE m.starts_at < $2 AND m.ends_at > $1
+			AND (
+				m.creator_id = ANY($3)
+				OR EXISTS (
+					SELECT 1 FROM meeting_participants mp
+					WHERE mp.meeting_id = m.id AND mp.user_id = ANY($3)
+				)
+			)
+		)
+	`, startsAt, endsAt, participantIDs).Scan(&exists)
+
+	return exists, err
 }

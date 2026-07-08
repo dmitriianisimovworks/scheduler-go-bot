@@ -299,29 +299,6 @@ func (r *Repository) Create(ctx context.Context, meeting domain.Meeting) (domain
 	return meeting, nil
 }
 
-func (r *Repository) ListByDay(ctx context.Context, day time.Time) ([]domain.Meeting, error) {
-	return r.listRange(ctx, day, day.Add(24*time.Hour))
-}
-
-func (r *Repository) ListByWeek(ctx context.Context, day time.Time) ([]domain.Meeting, error) {
-	return r.listRange(ctx, day, day.Add(7*24*time.Hour))
-}
-
-func (r *Repository) listRange(ctx context.Context, from, to time.Time) ([]domain.Meeting, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, title, creator_id, starts_at, ends_at
-		FROM meetings
-		WHERE starts_at < $2 AND ends_at > $1
-		ORDER BY starts_at
-	`, from, to)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return r.scanMeetings(ctx, rows)
-}
-
 func (r *Repository) ListUpcomingByCreator(ctx context.Context, creatorID int64, from time.Time, limit int) ([]domain.Meeting, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, title, creator_id, starts_at, ends_at
@@ -330,6 +307,29 @@ func (r *Repository) ListUpcomingByCreator(ctx context.Context, creatorID int64,
 		ORDER BY starts_at
 		LIMIT $3
 	`, creatorID, from, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return r.scanMeetings(ctx, rows)
+}
+
+func (r *Repository) ListUpcomingForUser(ctx context.Context, userID int64, from time.Time, limit int) ([]domain.Meeting, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, title, creator_id, starts_at, ends_at
+		FROM meetings
+		WHERE starts_at >= $1
+		AND (
+			creator_id = $2
+			OR EXISTS (
+				SELECT 1 FROM meeting_participants mp
+				WHERE mp.meeting_id = meetings.id AND mp.user_id = $2
+			)
+		)
+		ORDER BY starts_at
+		LIMIT $3
+	`, from, userID, limit)
 	if err != nil {
 		return nil, err
 	}

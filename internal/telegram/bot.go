@@ -25,11 +25,10 @@ type Bot struct {
 	clock  clock.Clock
 	bot    *tele.Bot
 
-	createMeeting usecase.CreateMeeting
-	listDay       usecase.ListDay
-	listWeek      usecase.ListWeek
-	listUpcoming  usecase.ListUpcoming
-	cancelMeeting usecase.CancelMeeting
+	createMeeting  usecase.CreateMeeting
+	listUpcoming   usecase.ListUpcoming
+	listMyMeetings usecase.ListMyMeetings
+	cancelMeeting  usecase.CancelMeeting
 
 	draftsMu sync.Mutex
 	drafts   map[int64]*meetingDraft
@@ -70,16 +69,15 @@ func New(
 	_ *sheets.Client,
 ) *Bot {
 	b := &Bot{
-		config:        cfg,
-		logger:        log,
-		users:         users,
-		clock:         clk,
-		createMeeting: usecase.NewCreateMeeting(meetings),
-		listDay:       usecase.NewListDay(meetings),
-		listWeek:      usecase.NewListWeek(meetings),
-		listUpcoming:  usecase.NewListUpcoming(meetings),
-		cancelMeeting: usecase.NewCancelMeeting(meetings),
-		drafts:        make(map[int64]*meetingDraft),
+		config:         cfg,
+		logger:         log,
+		users:          users,
+		clock:          clk,
+		createMeeting:  usecase.NewCreateMeeting(meetings),
+		listUpcoming:   usecase.NewListUpcoming(meetings),
+		listMyMeetings: usecase.NewListMyMeetings(meetings),
+		cancelMeeting:  usecase.NewCancelMeeting(meetings),
+		drafts:         make(map[int64]*meetingDraft),
 	}
 	b.initButtons()
 	return b
@@ -161,9 +159,9 @@ func (b *Bot) initButtons() {
 		IsPersistent:   true,
 	}
 	menu.Reply(
-		menu.Row(menu.Text("➕ Создать встречу"), menu.Text("📅 Сегодня")),
-		menu.Row(menu.Text("🗓 Неделя"), menu.Text("👤 Профиль")),
-		menu.Row(menu.Text("🗑 Отменить встречу"), menu.Text("❓ Помощь")),
+		menu.Row(menu.Text("➕ Создать встречу"), menu.Text("📋 Мои встречи")),
+		menu.Row(menu.Text("👤 Профиль"), menu.Text("🗑 Отменить встречу")),
+		menu.Row(menu.Text("❓ Помощь")),
 	)
 	b.mainMenuKeyboard = menu
 }
@@ -175,8 +173,7 @@ func (b *Bot) registerHandlers() {
 
 	b.bot.Handle("👤 Профиль", b.handleProfile)
 	b.bot.Handle("❓ Помощь", b.handleHelp)
-	b.bot.Handle("📅 Сегодня", b.handleToday)
-	b.bot.Handle("🗓 Неделя", b.handleWeek)
+	b.bot.Handle("📋 Мои встречи", b.handleMyMeetings)
 	b.bot.Handle("➕ Создать встречу", b.handleCreateMeetingStart)
 	b.bot.Handle("🗑 Отменить встречу", b.handleCancelMeetingStart)
 
@@ -493,40 +490,22 @@ func (b *Bot) handleBackToMenu(c tele.Context) error {
 	return b.sendMainMenu(c, user)
 }
 
-func (b *Bot) handleToday(c tele.Context) error {
+func (b *Bot) handleMyMeetings(c tele.Context) error {
 	user, err := b.currentUser(c)
 	if err != nil {
 		return b.handleStart(c)
 	}
 	loc := b.userLocation(user)
-	day := startOfDay(b.clock.Now().In(loc))
 
-	meetings, err := b.listDay.Execute(context.Background(), day)
+	meetings, err := b.listMyMeetings.Execute(context.Background(), user.ID, b.clock.Now())
 	if err != nil {
 		return err
 	}
-	return c.Send(formatMeetingsList("📅 Встречи сегодня", meetings, loc, "На сегодня встреч пока нет."), b.mainMenuKeyboard)
-}
-
-func (b *Bot) handleWeek(c tele.Context) error {
-	user, err := b.currentUser(c)
-	if err != nil {
-		return b.handleStart(c)
-	}
-	loc := b.userLocation(user)
-	now := b.clock.Now().In(loc)
-	offset := (int(now.Weekday()) + 6) % 7
-	weekStart := startOfDay(now).AddDate(0, 0, -offset)
-
-	meetings, err := b.listWeek.Execute(context.Background(), weekStart)
-	if err != nil {
-		return err
-	}
-	return c.Send(formatMeetingsList("🗓 Встречи на неделе", meetings, loc, "На этой неделе встреч пока нет."), b.mainMenuKeyboard)
+	return c.Send(formatMeetingsList("📋 Мои ближайшие встречи", meetings, loc, "Предстоящих встреч нет."), b.mainMenuKeyboard)
 }
 
 func (b *Bot) handleHelp(c tele.Context) error {
-	return c.Send("❓ Я помогу вести календарь встреч команды.\n\nСейчас доступно: регистрация, профиль, создание встреч с проверкой конфликтов, просмотр расписания на сегодня и на неделю, отмена своих встреч.", b.mainMenuKeyboard)
+	return c.Send("❓ Я помогу вести календарь встреч команды.\n\nСейчас доступно: регистрация, профиль, создание встреч с проверкой конфликтов, список моих ближайших встреч, отмена своих встреч.", b.mainMenuKeyboard)
 }
 
 func (b *Bot) sendMainMenu(c tele.Context, user domain.User) error {

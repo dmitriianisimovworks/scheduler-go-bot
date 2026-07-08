@@ -47,6 +47,9 @@ type Bot struct {
 	btnDateToday     tele.Btn
 	btnDateTomorrow  tele.Btn
 	btnDateOther     tele.Btn
+	btnDatePick      tele.Btn
+	btnMonthPrev     tele.Btn
+	btnMonthNext     tele.Btn
 	btnDur15         tele.Btn
 	btnDur30         tele.Btn
 	btnDur60         tele.Btn
@@ -140,7 +143,10 @@ func (b *Bot) initButtons() {
 	b.btnBackToMenu = tele.Btn{Unique: "back_menu", Text: "⬅️ В меню"}
 	b.btnDateToday = tele.Btn{Unique: "meeting_date_today", Text: "Сегодня"}
 	b.btnDateTomorrow = tele.Btn{Unique: "meeting_date_tomorrow", Text: "Завтра"}
-	b.btnDateOther = tele.Btn{Unique: "meeting_date_other", Text: "Другая дата"}
+	b.btnDateOther = tele.Btn{Unique: "meeting_date_other", Text: "✏️ Ввести дату вручную"}
+	b.btnDatePick = tele.Btn{Unique: "meeting_date_pick"}
+	b.btnMonthPrev = tele.Btn{Unique: "meeting_month_prev", Text: "◀"}
+	b.btnMonthNext = tele.Btn{Unique: "meeting_month_next", Text: "▶"}
 	b.btnDur15 = tele.Btn{Unique: "meeting_dur_15", Text: "15 мин"}
 	b.btnDur30 = tele.Btn{Unique: "meeting_dur_30", Text: "30 мин"}
 	b.btnDur60 = tele.Btn{Unique: "meeting_dur_60", Text: "1 час"}
@@ -188,6 +194,9 @@ func (b *Bot) registerHandlers() {
 	b.bot.Handle(&b.btnDateToday, b.handleMeetingDateToday)
 	b.bot.Handle(&b.btnDateTomorrow, b.handleMeetingDateTomorrow)
 	b.bot.Handle(&b.btnDateOther, b.handleMeetingDateOther)
+	b.bot.Handle(&b.btnDatePick, b.handleMeetingDatePick)
+	b.bot.Handle(&b.btnMonthPrev, b.handleMeetingMonthPrev)
+	b.bot.Handle(&b.btnMonthNext, b.handleMeetingMonthNext)
 	b.bot.Handle(&b.btnDur15, b.handleMeetingDuration(15*time.Minute))
 	b.bot.Handle(&b.btnDur30, b.handleMeetingDuration(30*time.Minute))
 	b.bot.Handle(&b.btnDur60, b.handleMeetingDuration(60*time.Minute))

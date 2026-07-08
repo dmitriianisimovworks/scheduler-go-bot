@@ -28,14 +28,21 @@ const (
 	workdayStartHour = 9
 	workdayEndHour   = 19
 	timeSlotStep     = 30 * time.Minute
+	maxMonthsAhead   = 12
 )
 
+var ruMonths = [...]string{
+	"Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+	"Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+}
+
 type meetingDraft struct {
-	step     string
-	title    string
-	date     time.Time
-	startsAt time.Time
-	duration time.Duration
+	step          string
+	title         string
+	date          time.Time
+	calendarMonth time.Time
+	startsAt      time.Time
+	duration      time.Duration
 }
 
 func (b *Bot) setDraft(telegramID int64, draft *meetingDraft) {
@@ -70,6 +77,15 @@ func startOfDay(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
 }
 
+func startOfMonth(t time.Time) time.Time {
+	y, m, _ := t.Date()
+	return time.Date(y, m, 1, 0, 0, 0, 0, t.Location())
+}
+
+func monthLabel(t time.Time) string {
+	return fmt.Sprintf("%s %d", ruMonths[t.Month()-1], t.Year())
+}
+
 func (b *Bot) handleCreateMeetingStart(c tele.Context) error {
 	user, err := b.currentUser(c)
 	if err != nil {
@@ -95,21 +111,29 @@ func (b *Bot) handleMeetingDraftText(c tele.Context, user domain.User, draft *me
 	case draftStepTitle:
 		draft.title = text
 		draft.step = draftStepDate
-		return b.askMeetingDate(c)
+		draft.calendarMonth = startOfMonth(b.clock.Now().In(loc))
+		return b.askMeetingDate(c, user, draft)
 	case draftStepDate:
 		date, err := parseMeetingDate(text, loc, b.clock.Now().In(loc))
 		if err != nil {
-			return c.Send("Не понял дату. Выберите кнопку или напишите в формате ДД.ММ или ДД.ММ.ГГГГ.")
+			return c.Send("Не понял дату. Выберите день в календаре или напишите в формате ДД.ММ или ДД.ММ.ГГГГ.")
+		}
+		if date.Before(startOfDay(b.clock.Now().In(loc))) {
+			return c.Send("Эта дата уже прошла. Напишите дату в будущем.")
 		}
 		draft.date = date
 		draft.step = draftStepTime
-		return b.askMeetingTime(c)
+		return b.askMeetingTime(c, user, draft)
 	case draftStepTime:
 		hour, minute, err := parseMeetingTime(text)
 		if err != nil {
 			return c.Send("Не понял время. Формат ЧЧ:ММ, например 14:30.")
 		}
-		draft.startsAt = time.Date(draft.date.Year(), draft.date.Month(), draft.date.Day(), hour, minute, 0, 0, loc)
+		startsAt := time.Date(draft.date.Year(), draft.date.Month(), draft.date.Day(), hour, minute, 0, 0, loc)
+		if !startsAt.After(b.clock.Now()) {
+			return c.Send("⚠️ Это время уже прошло. Напишите время в будущем.")
+		}
+		draft.startsAt = startsAt
 		draft.step = draftStepDuration
 		return b.askMeetingDuration(c)
 	case draftStepDuration:
@@ -122,13 +146,73 @@ func (b *Bot) handleMeetingDraftText(c tele.Context, user domain.User, draft *me
 	}
 }
 
-func (b *Bot) askMeetingDate(c tele.Context) error {
+func (b *Bot) askMeetingDate(c tele.Context, user domain.User, draft *meetingDraft) error {
+	loc := b.userLocation(user)
+	now := b.clock.Now().In(loc)
+	if draft.calendarMonth.IsZero() {
+		draft.calendarMonth = startOfMonth(now)
+	}
+
 	markup := &tele.ReplyMarkup{}
-	markup.Inline(
-		markup.Row(b.btnDateToday, b.btnDateTomorrow),
-		markup.Row(b.btnDateOther),
-	)
-	return c.Send("📆 На какой день? Выберите кнопку или напишите дату (ДД.ММ или ДД.ММ.ГГГГ).", markup)
+	rows := []tele.Row{markup.Row(b.btnDateToday, b.btnDateTomorrow)}
+
+	today := startOfDay(now)
+	for _, week := range calendarWeeks(draft.calendarMonth) {
+		var buttons []tele.Btn
+		for _, day := range week {
+			if day == 0 {
+				continue
+			}
+			date := time.Date(draft.calendarMonth.Year(), draft.calendarMonth.Month(), day, 0, 0, 0, 0, loc)
+			if date.Before(today) {
+				continue
+			}
+			buttons = append(buttons, markup.Data(strconv.Itoa(day), b.btnDatePick.Unique, date.Format("2006-01-02")))
+		}
+		if len(buttons) > 0 {
+			rows = append(rows, markup.Row(buttons...))
+		}
+	}
+
+	var navButtons []tele.Btn
+	if startOfMonth(draft.calendarMonth).After(startOfMonth(now)) {
+		navButtons = append(navButtons, b.btnMonthPrev)
+	}
+	if startOfMonth(draft.calendarMonth).Before(startOfMonth(now).AddDate(0, maxMonthsAhead, 0)) {
+		navButtons = append(navButtons, b.btnMonthNext)
+	}
+	if len(navButtons) > 0 {
+		rows = append(rows, markup.Row(navButtons...))
+	}
+	rows = append(rows, markup.Row(b.btnDateOther))
+
+	markup.Inline(rows...)
+
+	text := fmt.Sprintf("📆 На какой день?\n\n%s", monthLabel(draft.calendarMonth))
+	return c.EditOrSend(text, markup)
+}
+
+func calendarWeeks(month time.Time) [][]int {
+	first := time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, month.Location())
+	daysInMonth := first.AddDate(0, 1, -1).Day()
+	leading := (int(first.Weekday()) + 6) % 7
+
+	var weeks [][]int
+	week := make([]int, 0, 7)
+	for i := 0; i < leading; i++ {
+		week = append(week, 0)
+	}
+	for day := 1; day <= daysInMonth; day++ {
+		week = append(week, day)
+		if len(week) == 7 {
+			weeks = append(weeks, week)
+			week = make([]int, 0, 7)
+		}
+	}
+	if len(week) > 0 {
+		weeks = append(weeks, week)
+	}
+	return weeks
 }
 
 func (b *Bot) askMeetingDuration(c tele.Context) error {
@@ -140,10 +224,20 @@ func (b *Bot) askMeetingDuration(c tele.Context) error {
 	return c.Send("⏱ Сколько по времени?", markup)
 }
 
-func (b *Bot) askMeetingTime(c tele.Context) error {
-	markup := &tele.ReplyMarkup{}
-	slots := timeSlots()
+func (b *Bot) askMeetingTime(c tele.Context, user domain.User, draft *meetingDraft) error {
+	loc := b.userLocation(user)
+	now := b.clock.Now().In(loc)
+	slots := timeSlots(draft.date, now)
 
+	if len(slots) == 0 {
+		draft.step = draftStepDate
+		if err := c.Send("На выбранный день рабочих слотов больше не осталось. Выберите другой день."); err != nil {
+			return err
+		}
+		return b.askMeetingDate(c, user, draft)
+	}
+
+	markup := &tele.ReplyMarkup{}
 	rows := make([]tele.Row, 0, len(slots)/3+2)
 	for i := 0; i < len(slots); i += 3 {
 		end := min(i+3, len(slots))
@@ -159,12 +253,16 @@ func (b *Bot) askMeetingTime(c tele.Context) error {
 	return c.Send("🕐 Время начала?", markup)
 }
 
-func timeSlots() []string {
+func timeSlots(date time.Time, now time.Time) []string {
+	isToday := startOfDay(date).Equal(startOfDay(now))
 	var slots []string
 	for h := workdayStartHour; h <= workdayEndHour; h++ {
 		for m := 0; m < 60; m += int(timeSlotStep / time.Minute) {
 			if h == workdayEndHour && m > 0 {
 				break
+			}
+			if isToday && (h < now.Hour() || (h == now.Hour() && m <= now.Minute())) {
+				continue
 			}
 			slots = append(slots, fmt.Sprintf("%02d:%02d", h, m))
 		}
@@ -198,12 +296,65 @@ func (b *Bot) setMeetingDate(c tele.Context, text string) error {
 	}
 	draft.date = date
 	draft.step = draftStepTime
-	return b.askMeetingTime(c)
+	return b.askMeetingTime(c, user, draft)
 }
 
 func (b *Bot) handleMeetingDateOther(c tele.Context) error {
 	defer c.Respond()
 	return c.Send("Напишите дату в формате ДД.ММ или ДД.ММ.ГГГГ.")
+}
+
+func (b *Bot) handleMeetingDatePick(c tele.Context) error {
+	defer c.Respond()
+	user, err := b.currentUser(c)
+	if err != nil {
+		return err
+	}
+	draft, ok := b.getDraft(user.TelegramID)
+	if !ok || draft.step != draftStepDate {
+		return nil
+	}
+	loc := b.userLocation(user)
+	parsed, err := time.ParseInLocation("2006-01-02", c.Data(), loc)
+	if err != nil {
+		return c.RespondText("Не понял дату")
+	}
+	if parsed.Before(startOfDay(b.clock.Now().In(loc))) {
+		return c.RespondText("Эта дата уже прошла")
+	}
+	draft.date = parsed
+	draft.step = draftStepTime
+	return b.askMeetingTime(c, user, draft)
+}
+
+func (b *Bot) handleMeetingMonthPrev(c tele.Context) error {
+	defer c.Respond()
+	return b.shiftCalendarMonth(c, -1)
+}
+
+func (b *Bot) handleMeetingMonthNext(c tele.Context) error {
+	defer c.Respond()
+	return b.shiftCalendarMonth(c, 1)
+}
+
+func (b *Bot) shiftCalendarMonth(c tele.Context, delta int) error {
+	user, err := b.currentUser(c)
+	if err != nil {
+		return err
+	}
+	draft, ok := b.getDraft(user.TelegramID)
+	if !ok || draft.step != draftStepDate {
+		return nil
+	}
+	loc := b.userLocation(user)
+	next := draft.calendarMonth.AddDate(0, delta, 0)
+	minMonth := startOfMonth(b.clock.Now().In(loc))
+	maxMonth := minMonth.AddDate(0, maxMonthsAhead, 0)
+	if next.Before(minMonth) || next.After(maxMonth) {
+		return nil
+	}
+	draft.calendarMonth = next
+	return b.askMeetingDate(c, user, draft)
 }
 
 func (b *Bot) handleMeetingTimePick(c tele.Context) error {
@@ -221,7 +372,11 @@ func (b *Bot) handleMeetingTimePick(c tele.Context) error {
 		return c.Send("Не понял время.")
 	}
 	loc := b.userLocation(user)
-	draft.startsAt = time.Date(draft.date.Year(), draft.date.Month(), draft.date.Day(), hour, minute, 0, 0, loc)
+	startsAt := time.Date(draft.date.Year(), draft.date.Month(), draft.date.Day(), hour, minute, 0, 0, loc)
+	if !startsAt.After(b.clock.Now()) {
+		return c.Send("⚠️ Это время уже прошло. Выберите другое.")
+	}
+	draft.startsAt = startsAt
 	draft.step = draftStepDuration
 	return b.askMeetingDuration(c)
 }
@@ -268,9 +423,16 @@ func (b *Bot) handleNoParticipants(c tele.Context) error {
 }
 
 func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetingDraft, participantsText string) error {
-	participantIDs, unknown, err := b.resolveParticipants(user, participantsText)
+	resolved, unknown, err := b.resolveParticipants(user, participantsText)
 	if err != nil {
 		return err
+	}
+
+	participantIDs := make([]int64, 0, len(resolved))
+	labels := make([]string, 0, len(resolved))
+	for _, p := range resolved {
+		participantIDs = append(participantIDs, p.id)
+		labels = append(labels, p.label)
 	}
 
 	endsAt := draft.startsAt.Add(draft.duration)
@@ -281,11 +443,22 @@ func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetin
 		ParticipantIDs: participantIDs,
 		StartsAt:       draft.startsAt,
 		EndsAt:         endsAt,
+		Now:            b.clock.Now(),
 	})
 	if err != nil {
 		if errors.Is(err, usecase.ErrConflict) {
 			draft.step = draftStepTime
-			return c.Send("⚠️ В это время уже есть встреча у вас или у участника. Напишите другое время (ЧЧ:ММ).")
+			if sendErr := c.Send("⚠️ В это время уже есть встреча у вас или у участника. Выберите другое время."); sendErr != nil {
+				return sendErr
+			}
+			return b.askMeetingTime(c, user, draft)
+		}
+		if errors.Is(err, usecase.ErrPastTime) {
+			draft.step = draftStepTime
+			if sendErr := c.Send("⚠️ Это время уже прошло. Выберите другое."); sendErr != nil {
+				return sendErr
+			}
+			return b.askMeetingTime(c, user, draft)
 		}
 		return err
 	}
@@ -299,8 +472,13 @@ func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetin
 		meeting.StartsAt.In(loc).Format("02.01.2006 15:04"),
 		meeting.EndsAt.In(loc).Format("15:04"),
 	)
+	if len(labels) > 0 {
+		summary += fmt.Sprintf("\n\n👥 Участники: %s", strings.Join(labels, ", "))
+	} else {
+		summary += "\n\n👥 Участники: только вы"
+	}
 	if len(unknown) > 0 {
-		summary += fmt.Sprintf("\n\n⚠️ Не найдены пользователи: %s", strings.Join(unknown, ", "))
+		summary += fmt.Sprintf("\n⚠️ Не найдены пользователи: %s", strings.Join(unknown, ", "))
 	}
 
 	if err := c.Send(summary); err != nil {
@@ -309,13 +487,18 @@ func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetin
 	return b.sendMainMenu(c, user)
 }
 
-func (b *Bot) resolveParticipants(creator domain.User, text string) ([]int64, []string, error) {
+type resolvedParticipant struct {
+	id    int64
+	label string
+}
+
+func (b *Bot) resolveParticipants(creator domain.User, text string) ([]resolvedParticipant, []string, error) {
 	text = strings.TrimSpace(text)
 	if text == "" || text == "-" {
 		return nil, nil, nil
 	}
 
-	var participantIDs []int64
+	var resolved []resolvedParticipant
 	var unknown []string
 	seen := map[int64]bool{}
 
@@ -333,10 +516,18 @@ func (b *Bot) resolveParticipants(creator domain.User, text string) ([]int64, []
 			continue
 		}
 		seen[participant.ID] = true
-		participantIDs = append(participantIDs, participant.ID)
+
+		label := participant.DisplayName
+		if label == "" {
+			label = participant.FullName
+		}
+		if label == "" {
+			label = participant.Username
+		}
+		resolved = append(resolved, resolvedParticipant{id: participant.ID, label: label})
 	}
 
-	return participantIDs, unknown, nil
+	return resolved, unknown, nil
 }
 
 func parseMeetingDate(text string, loc *time.Location, now time.Time) (time.Time, error) {

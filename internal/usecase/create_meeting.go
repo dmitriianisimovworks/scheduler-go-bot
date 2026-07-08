@@ -11,6 +11,7 @@ import (
 )
 
 var ErrConflict = errors.New("meeting conflicts with existing schedule")
+var ErrPastTime = errors.New("meeting start time is in the past")
 
 type CreateMeeting struct {
 	repo repository.MeetingRepository
@@ -26,6 +27,7 @@ type CreateMeetingInput struct {
 	ParticipantIDs []int64
 	StartsAt       time.Time
 	EndsAt         time.Time
+	Now            time.Time
 }
 
 func (uc CreateMeeting) Execute(ctx context.Context, input CreateMeetingInput) (domain.Meeting, error) {
@@ -34,6 +36,9 @@ func (uc CreateMeeting) Execute(ctx context.Context, input CreateMeetingInput) (
 	}
 	if !input.EndsAt.After(input.StartsAt) {
 		return domain.Meeting{}, errors.New("end time must be after start time")
+	}
+	if !input.Now.IsZero() && !input.StartsAt.After(input.Now) {
+		return domain.Meeting{}, ErrPastTime
 	}
 
 	participantIDs := append([]int64{input.CreatorID}, input.ParticipantIDs...)

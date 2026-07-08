@@ -25,11 +25,15 @@ func buildContainer() (*App, error) {
 	cfg := config.Load()
 	log := logger.New(cfg.AppEnv)
 	clk := clock.New()
+	ctx := context.Background()
 
-	repo := postgres.New(cfg)
+	repo, err := postgres.New(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
 	sheetsClient := sheets.New(cfg)
-	httpServer := apphttp.NewServer(cfg, log)
 	tg := telegram.New(cfg, log, clk, repo, sheetsClient)
+	httpServer := apphttp.NewServer(cfg, log, tg)
 
 	return &App{
 		httpServer: httpServer,

@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -11,6 +11,8 @@ RUN go build -o /bin/meeting-bot ./cmd/bot
 FROM alpine:3.22
 
 WORKDIR /app
+
+RUN apk add --no-cache ca-certificates tzdata
 
 COPY --from=builder /bin/meeting-bot /usr/local/bin/meeting-bot
 

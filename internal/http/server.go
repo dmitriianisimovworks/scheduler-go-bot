@@ -6,10 +6,15 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	tele "gopkg.in/telebot.v3"
 
 	"meeting-bot/internal/config"
 	"meeting-bot/internal/platform/logger"
 )
+
+type TelegramProcessor interface {
+	ProcessUpdate(update tele.Update)
+}
 
 type Server struct {
 	config config.Config
@@ -17,10 +22,10 @@ type Server struct {
 	http   *http.Server
 }
 
-func NewServer(cfg config.Config, log *logger.Logger) *Server {
+func NewServer(cfg config.Config, log *logger.Logger, telegram TelegramProcessor) *Server {
 	router := chi.NewRouter()
 	registerHealthRoutes(router)
-	registerWebhookRoutes(router)
+	registerWebhookRoutes(router, cfg, log, telegram)
 
 	return &Server{
 		config: cfg,

@@ -9,6 +9,12 @@ import (
 
 type UserRepository interface {
 	Upsert(ctx context.Context, user domain.User) (domain.User, error)
+	GetByTelegramID(ctx context.Context, telegramID int64) (domain.User, error)
+	SetRegistrationStep(ctx context.Context, telegramID int64, step string) error
+	UpdateDisplayName(ctx context.Context, telegramID int64, displayName string) error
+	UpdateTeam(ctx context.Context, telegramID int64, team string) error
+	UpdateRole(ctx context.Context, telegramID int64, role string) error
+	UpdateTimezone(ctx context.Context, telegramID int64, timezone string) error
 }
 
 type MeetingRepository interface {

@@ -2,8 +2,18 @@ CREATE TABLE IF NOT EXISTS users (
     id BIGSERIAL PRIMARY KEY,
     telegram_id BIGINT NOT NULL UNIQUE,
     username TEXT NOT NULL DEFAULT '',
+    first_name TEXT NOT NULL DEFAULT '',
+    last_name TEXT NOT NULL DEFAULT '',
     full_name TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    display_name TEXT NOT NULL DEFAULT '',
+    team TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT '',
+    timezone TEXT NOT NULL DEFAULT 'Europe/Moscow',
+    registration_step TEXT NOT NULL DEFAULT 'confirm_name',
+    registered_at TIMESTAMPTZ,
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS meetings (

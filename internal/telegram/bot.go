@@ -32,29 +32,31 @@ type Bot struct {
 	draftsMu sync.Mutex
 	drafts   map[int64]*meetingDraft
 
-	btnUseName       tele.Btn
-	btnEnterName     tele.Btn
-	btnTZMoscow      tele.Btn
-	btnTZAlmaty      tele.Btn
-	btnTZOther       tele.Btn
-	btnEditName      tele.Btn
-	btnEditTeam      tele.Btn
-	btnEditRole      tele.Btn
-	btnEditTimezone  tele.Btn
-	btnBackToMenu    tele.Btn
-	btnDateToday     tele.Btn
-	btnDateTomorrow  tele.Btn
-	btnDateOther     tele.Btn
-	btnDatePick      tele.Btn
-	btnMonthPrev     tele.Btn
-	btnMonthNext     tele.Btn
-	btnDur15         tele.Btn
-	btnDur30         tele.Btn
-	btnDur60         tele.Btn
-	btnDur90         tele.Btn
-	btnTimePick      tele.Btn
-	btnTimeOther     tele.Btn
-	btnNoParticipant tele.Btn
+	btnUseName           tele.Btn
+	btnEnterName         tele.Btn
+	btnTZMoscow          tele.Btn
+	btnTZAlmaty          tele.Btn
+	btnTZOther           tele.Btn
+	btnEditName          tele.Btn
+	btnEditTeam          tele.Btn
+	btnEditRole          tele.Btn
+	btnEditTimezone      tele.Btn
+	btnBackToMenu        tele.Btn
+	btnDateToday         tele.Btn
+	btnDateTomorrow      tele.Btn
+	btnDateOther         tele.Btn
+	btnDatePick          tele.Btn
+	btnMonthPrev         tele.Btn
+	btnMonthNext         tele.Btn
+	btnDur15             tele.Btn
+	btnDur30             tele.Btn
+	btnDur60             tele.Btn
+	btnDur90             tele.Btn
+	btnTimePick          tele.Btn
+	btnTimeOther         tele.Btn
+	btnParticipantToggle tele.Btn
+	btnParticipantsDone  tele.Btn
+	btnDraftCancel       tele.Btn
 
 	btnMyMeetingInfo          tele.Btn
 	btnMyMeetingCancelAsk     tele.Btn
@@ -154,7 +156,9 @@ func (b *Bot) initButtons() {
 	b.btnDur90 = tele.Btn{Unique: "meeting_dur_90", Text: "1.5 часа"}
 	b.btnTimePick = tele.Btn{Unique: "meeting_time_pick"}
 	b.btnTimeOther = tele.Btn{Unique: "meeting_time_other", Text: "✏️ Другое время"}
-	b.btnNoParticipant = tele.Btn{Unique: "meeting_participants_skip", Text: "Без участников"}
+	b.btnParticipantToggle = tele.Btn{Unique: "meeting_participant_toggle"}
+	b.btnParticipantsDone = tele.Btn{Unique: "meeting_participants_done", Text: "✅ Готово"}
+	b.btnDraftCancel = tele.Btn{Unique: "meeting_draft_cancel", Text: "✖️ Отмена"}
 	b.btnMyMeetingInfo = tele.Btn{Unique: "my_meeting_info"}
 	b.btnMyMeetingCancelAsk = tele.Btn{Unique: "my_meeting_cancel_ask", Text: "✕"}
 	b.btnMyMeetingCancelConfirm = tele.Btn{Unique: "my_meeting_cancel_confirm", Text: "✅ Да, отменить"}
@@ -204,7 +208,9 @@ func (b *Bot) registerHandlers() {
 	b.bot.Handle(&b.btnDur90, b.handleMeetingDuration(90*time.Minute))
 	b.bot.Handle(&b.btnTimePick, b.handleMeetingTimePick)
 	b.bot.Handle(&b.btnTimeOther, b.handleMeetingTimeOther)
-	b.bot.Handle(&b.btnNoParticipant, b.handleNoParticipants)
+	b.bot.Handle(&b.btnParticipantToggle, b.handleParticipantToggle)
+	b.bot.Handle(&b.btnParticipantsDone, b.handleParticipantsDone)
+	b.bot.Handle(&b.btnDraftCancel, b.handleDraftCancel)
 	b.bot.Handle(&b.btnMyMeetingInfo, b.handleMyMeetingInfo)
 	b.bot.Handle(&b.btnMyMeetingCancelAsk, b.handleMyMeetingCancelAsk)
 	b.bot.Handle(&b.btnMyMeetingCancelConfirm, b.handleMyMeetingCancelConfirm)

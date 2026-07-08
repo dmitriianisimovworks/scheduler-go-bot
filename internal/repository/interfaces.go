@@ -10,7 +10,7 @@ import (
 type UserRepository interface {
 	Upsert(ctx context.Context, user domain.User) (domain.User, error)
 	GetByTelegramID(ctx context.Context, telegramID int64) (domain.User, error)
-	GetByUsername(ctx context.Context, username string) (domain.User, error)
+	ListRegistered(ctx context.Context) ([]domain.User, error)
 	SetRegistrationStep(ctx context.Context, telegramID int64, step string) error
 	UpdateDisplayName(ctx context.Context, telegramID int64, displayName string) error
 	UpdateTeam(ctx context.Context, telegramID int64, team string) error

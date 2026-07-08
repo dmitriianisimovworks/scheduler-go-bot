@@ -43,6 +43,7 @@ type meetingDraft struct {
 	calendarMonth time.Time
 	startsAt      time.Time
 	duration      time.Duration
+	selected      map[int64]bool
 }
 
 func (b *Bot) setDraft(telegramID int64, draft *meetingDraft) {
@@ -96,7 +97,19 @@ func (b *Bot) handleCreateMeetingStart(c tele.Context) error {
 	}
 
 	b.setDraft(user.TelegramID, &meetingDraft{step: draftStepTitle})
-	return c.Send("➕ Название встречи? Напишите коротко, например: Синк по продукту.\n\nЧтобы отменить создание, напишите «отмена».")
+	markup := &tele.ReplyMarkup{}
+	markup.Inline(markup.Row(b.btnDraftCancel))
+	return c.Send("➕ Название встречи? Напишите коротко, например: Синк по продукту.", markup)
+}
+
+func (b *Bot) handleDraftCancel(c tele.Context) error {
+	defer c.Respond()
+	user, err := b.currentUser(c)
+	if err != nil {
+		return err
+	}
+	b.clearDraft(user.TelegramID)
+	return c.Send("Создание встречи отменено.", b.mainMenuKeyboard)
 }
 
 func (b *Bot) handleMeetingDraftText(c tele.Context, user domain.User, draft *meetingDraft, text string) error {
@@ -139,7 +152,7 @@ func (b *Bot) handleMeetingDraftText(c tele.Context, user domain.User, draft *me
 	case draftStepDuration:
 		return b.askMeetingDuration(c)
 	case draftStepParticipants:
-		return b.finishMeetingDraft(c, user, draft, text)
+		return b.askMeetingParticipants(c, user, draft)
 	default:
 		b.clearDraft(user.TelegramID)
 		return b.sendMainMenu(c, user)
@@ -301,7 +314,9 @@ func (b *Bot) setMeetingDate(c tele.Context, text string) error {
 
 func (b *Bot) handleMeetingDateOther(c tele.Context) error {
 	defer c.Respond()
-	return c.Send("Напишите дату в формате ДД.ММ или ДД.ММ.ГГГГ.")
+	markup := &tele.ReplyMarkup{}
+	markup.Inline(markup.Row(b.btnDraftCancel))
+	return c.Send("Напишите дату в формате ДД.ММ или ДД.ММ.ГГГГ.", markup)
 }
 
 func (b *Bot) handleMeetingDatePick(c tele.Context) error {
@@ -383,7 +398,9 @@ func (b *Bot) handleMeetingTimePick(c tele.Context) error {
 
 func (b *Bot) handleMeetingTimeOther(c tele.Context) error {
 	defer c.Respond()
-	return c.Send("Напишите время в формате ЧЧ:ММ, например 14:30.")
+	markup := &tele.ReplyMarkup{}
+	markup.Inline(markup.Row(b.btnDraftCancel))
+	return c.Send("Напишите время в формате ЧЧ:ММ, например 14:30.", markup)
 }
 
 func (b *Bot) handleMeetingDuration(duration time.Duration) tele.HandlerFunc {
@@ -399,17 +416,42 @@ func (b *Bot) handleMeetingDuration(duration time.Duration) tele.HandlerFunc {
 		}
 		draft.duration = duration
 		draft.step = draftStepParticipants
-		return b.askMeetingParticipants(c)
+		return b.askMeetingParticipants(c, user, draft)
 	}
 }
 
-func (b *Bot) askMeetingParticipants(c tele.Context) error {
-	markup := &tele.ReplyMarkup{}
-	markup.Inline(markup.Row(b.btnNoParticipant))
-	return c.Send("👥 Кто участвует? Напишите Telegram-юзернеймы через запятую (без @), например: ivan, maria.\n\nИли нажмите кнопку, если участников кроме вас нет.", markup)
+func participantLabel(user domain.User) string {
+	return fmt.Sprintf("%s: %s; %s", valueOrDash(user.DisplayName), valueOrDash(user.Team), valueOrDash(user.Role))
 }
 
-func (b *Bot) handleNoParticipants(c tele.Context) error {
+func (b *Bot) askMeetingParticipants(c tele.Context, user domain.User, draft *meetingDraft) error {
+	candidates, err := b.users.ListRegistered(context.Background())
+	if err != nil {
+		return err
+	}
+
+	markup := &tele.ReplyMarkup{}
+	rows := make([]tele.Row, 0, len(candidates)+2)
+	for _, candidate := range candidates {
+		label := participantLabel(candidate)
+		if candidate.TelegramID == user.TelegramID {
+			label += " (вы)"
+		}
+		checkbox := "⬜"
+		if draft.selected[candidate.ID] {
+			checkbox = "✅"
+		}
+		btn := markup.Data(checkbox+" "+label, b.btnParticipantToggle.Unique, strconv.FormatInt(candidate.ID, 10))
+		rows = append(rows, markup.Row(btn))
+	}
+	rows = append(rows, markup.Row(b.btnParticipantsDone))
+	rows = append(rows, markup.Row(b.btnDraftCancel))
+	markup.Inline(rows...)
+
+	return c.EditOrSend("👥 Кто участвует? Отметьте участников и нажмите «Готово».", markup)
+}
+
+func (b *Bot) handleParticipantToggle(c tele.Context) error {
 	defer c.Respond()
 	user, err := b.currentUser(c)
 	if err != nil {
@@ -419,20 +461,44 @@ func (b *Bot) handleNoParticipants(c tele.Context) error {
 	if !ok || draft.step != draftStepParticipants {
 		return nil
 	}
-	return b.finishMeetingDraft(c, user, draft, "-")
+	id, err := strconv.ParseInt(c.Data(), 10, 64)
+	if err != nil {
+		return nil
+	}
+	if draft.selected == nil {
+		draft.selected = make(map[int64]bool)
+	}
+	draft.selected[id] = !draft.selected[id]
+	return b.askMeetingParticipants(c, user, draft)
 }
 
-func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetingDraft, participantsText string) error {
-	resolved, unknown, err := b.resolveParticipants(user, participantsText)
+func (b *Bot) handleParticipantsDone(c tele.Context) error {
+	defer c.Respond()
+	user, err := b.currentUser(c)
+	if err != nil {
+		return err
+	}
+	draft, ok := b.getDraft(user.TelegramID)
+	if !ok || draft.step != draftStepParticipants {
+		return nil
+	}
+	return b.finishMeetingDraft(c, user, draft)
+}
+
+func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetingDraft) error {
+	candidates, err := b.users.ListRegistered(context.Background())
 	if err != nil {
 		return err
 	}
 
-	participantIDs := make([]int64, 0, len(resolved))
-	labels := make([]string, 0, len(resolved))
-	for _, p := range resolved {
-		participantIDs = append(participantIDs, p.id)
-		labels = append(labels, p.label)
+	var participantIDs []int64
+	var labels []string
+	for _, candidate := range candidates {
+		if candidate.TelegramID == user.TelegramID || !draft.selected[candidate.ID] {
+			continue
+		}
+		participantIDs = append(participantIDs, candidate.ID)
+		labels = append(labels, valueOrDash(candidate.DisplayName))
 	}
 
 	endsAt := draft.startsAt.Add(draft.duration)
@@ -477,57 +543,11 @@ func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetin
 	} else {
 		summary += "\n\n👥 Участники: только вы"
 	}
-	if len(unknown) > 0 {
-		summary += fmt.Sprintf("\n⚠️ Не найдены пользователи: %s", strings.Join(unknown, ", "))
-	}
 
 	if err := c.Send(summary); err != nil {
 		return err
 	}
 	return b.sendMainMenu(c, user)
-}
-
-type resolvedParticipant struct {
-	id    int64
-	label string
-}
-
-func (b *Bot) resolveParticipants(creator domain.User, text string) ([]resolvedParticipant, []string, error) {
-	text = strings.TrimSpace(text)
-	if text == "" || text == "-" {
-		return nil, nil, nil
-	}
-
-	var resolved []resolvedParticipant
-	var unknown []string
-	seen := map[int64]bool{}
-
-	for _, raw := range strings.Split(text, ",") {
-		username := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "@"))
-		if username == "" {
-			continue
-		}
-		participant, err := b.users.GetByUsername(context.Background(), username)
-		if err != nil {
-			unknown = append(unknown, username)
-			continue
-		}
-		if participant.TelegramID == creator.TelegramID || seen[participant.ID] {
-			continue
-		}
-		seen[participant.ID] = true
-
-		label := participant.DisplayName
-		if label == "" {
-			label = participant.FullName
-		}
-		if label == "" {
-			label = participant.Username
-		}
-		resolved = append(resolved, resolvedParticipant{id: participant.ID, label: label})
-	}
-
-	return resolved, unknown, nil
 }
 
 func parseMeetingDate(text string, loc *time.Location, now time.Time) (time.Time, error) {

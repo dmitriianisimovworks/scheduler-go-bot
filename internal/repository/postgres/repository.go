@@ -185,14 +185,27 @@ func (r *Repository) GetByTelegramID(ctx context.Context, telegramID int64) (dom
 	return scanUser(row)
 }
 
-func (r *Repository) GetByUsername(ctx context.Context, username string) (domain.User, error) {
-	row := r.db.QueryRowContext(ctx, `
+func (r *Repository) ListRegistered(ctx context.Context) ([]domain.User, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, telegram_id, username, first_name, last_name, full_name, display_name, team, role, timezone, registration_step, registered_at, last_seen_at
 		FROM users
-		WHERE lower(username) = lower($1)
-	`, username)
+		WHERE registration_step = $1
+		ORDER BY display_name
+	`, domain.RegistrationStepComplete)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
-	return scanUser(row)
+	var users []domain.User
+	for rows.Next() {
+		user, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, rows.Err()
 }
 
 func (r *Repository) SetRegistrationStep(ctx context.Context, telegramID int64, step string) error {

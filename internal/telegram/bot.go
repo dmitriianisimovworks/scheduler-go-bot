@@ -19,11 +19,13 @@ import (
 )
 
 type Bot struct {
-	config config.Config
-	logger *logger.Logger
-	users  repository.UserRepository
-	clock  clock.Clock
-	bot    *tele.Bot
+	config   config.Config
+	logger   *logger.Logger
+	users    repository.UserRepository
+	settings repository.SettingsRepository
+	calendar usecase.CalendarClient
+	clock    clock.Clock
+	bot      *tele.Bot
 
 	createMeeting  usecase.CreateMeeting
 	listMyMeetings usecase.ListMyMeetings
@@ -33,10 +35,18 @@ type Bot struct {
 	draftsMu sync.Mutex
 	drafts   map[int64]*meetingDraft
 
+	adminIDs map[int64]bool
+
+	workdayMu        sync.RWMutex
+	workdayStartHour int
+	workdayEndHour   int
+
+	adminInputMu sync.Mutex
+	adminInput   map[int64]string
+
 	btnUseName           tele.Btn
 	btnEnterName         tele.Btn
-	btnTZMoscow          tele.Btn
-	btnTZAlmaty          tele.Btn
+	btnTZPick            tele.Btn
 	btnTZOther           tele.Btn
 	btnEditName          tele.Btn
 	btnEditTeam          tele.Btn
@@ -59,10 +69,23 @@ type Bot struct {
 	btnParticipantsDone  tele.Btn
 	btnDraftCancel       tele.Btn
 
+	btnTeamPick  tele.Btn
+	btnTeamOther tele.Btn
+	btnRolePick  tele.Btn
+	btnRoleOther tele.Btn
+
 	btnMyMeetingInfo          tele.Btn
 	btnMyMeetingCancelAsk     tele.Btn
 	btnMyMeetingCancelConfirm tele.Btn
 	btnMyMeetingCancelDecline tele.Btn
+
+	btnAdminCalendar      tele.Btn
+	btnAdminCalendarEdit  tele.Btn
+	btnAdminWorkHours     tele.Btn
+	btnAdminWorkHoursPick tele.Btn
+	btnAdminEmployees     tele.Btn
+	btnAdminBack          tele.Btn
+	btnAdminInputCancel   tele.Btn
 
 	btnScheduleToday       tele.Btn
 	btnScheduleTomorrow    tele.Btn
@@ -77,7 +100,8 @@ type Bot struct {
 	btnScheduleBack        tele.Btn
 	btnScheduleNoop        tele.Btn
 
-	mainMenuKeyboard *tele.ReplyMarkup
+	mainMenuKeyboard  *tele.ReplyMarkup
+	adminMenuKeyboard *tele.ReplyMarkup
 }
 
 func New(
@@ -86,21 +110,34 @@ func New(
 	clk clock.Clock,
 	users repository.UserRepository,
 	meetings repository.MeetingRepository,
+	settings repository.SettingsRepository,
 	_ *sheets.Client,
 	calendarClient usecase.CalendarClient,
 ) *Bot {
+	adminIDs := make(map[int64]bool, len(cfg.AdminTelegramIDs))
+	for _, id := range cfg.AdminTelegramIDs {
+		adminIDs[id] = true
+	}
+
 	b := &Bot{
-		config:         cfg,
-		logger:         log,
-		users:          users,
-		clock:          clk,
-		createMeeting:  usecase.NewCreateMeeting(meetings, calendarClient),
-		listMyMeetings: usecase.NewListMyMeetings(meetings),
-		cancelMeeting:  usecase.NewCancelMeeting(meetings, calendarClient),
-		listSchedule:   usecase.NewListSchedule(meetings),
-		drafts:         make(map[int64]*meetingDraft),
+		config:           cfg,
+		logger:           log,
+		users:            users,
+		settings:         settings,
+		calendar:         calendarClient,
+		clock:            clk,
+		adminIDs:         adminIDs,
+		workdayStartHour: defaultWorkdayStartHour,
+		workdayEndHour:   defaultWorkdayEndHour,
+		adminInput:       make(map[int64]string),
+		createMeeting:    usecase.NewCreateMeeting(meetings, calendarClient),
+		listMyMeetings:   usecase.NewListMyMeetings(meetings),
+		cancelMeeting:    usecase.NewCancelMeeting(meetings, calendarClient),
+		listSchedule:     usecase.NewListSchedule(meetings),
+		drafts:           make(map[int64]*meetingDraft),
 	}
 	b.initButtons()
+	b.loadSettings()
 	return b
 }
 
@@ -152,9 +189,8 @@ func (b *Bot) ProcessUpdate(update tele.Update) {
 func (b *Bot) initButtons() {
 	b.btnUseName = tele.Btn{Unique: "profile_use_name", Text: "✅ Использовать"}
 	b.btnEnterName = tele.Btn{Unique: "profile_enter_name", Text: "✏️ Ввести другое"}
-	b.btnTZMoscow = tele.Btn{Unique: "tz_moscow", Text: "Москва"}
-	b.btnTZAlmaty = tele.Btn{Unique: "tz_almaty", Text: "Алматы"}
-	b.btnTZOther = tele.Btn{Unique: "tz_other", Text: "Другой"}
+	b.btnTZPick = tele.Btn{Unique: "tz_pick"}
+	b.btnTZOther = tele.Btn{Unique: "tz_other", Text: "✏️ Другой"}
 	b.btnEditName = tele.Btn{Unique: "edit_name", Text: "✏️ Имя"}
 	b.btnEditTeam = tele.Btn{Unique: "edit_team", Text: "🏢 Команда"}
 	b.btnEditRole = tele.Btn{Unique: "edit_role", Text: "💼 Роль"}
@@ -193,6 +229,19 @@ func (b *Bot) initButtons() {
 	b.btnScheduleBack = tele.Btn{Unique: "sched_back"}
 	b.btnScheduleNoop = tele.Btn{Unique: "sched_noop"}
 
+	b.btnTeamPick = tele.Btn{Unique: "team_pick"}
+	b.btnTeamOther = tele.Btn{Unique: "team_other", Text: "✏️ Другое"}
+	b.btnRolePick = tele.Btn{Unique: "role_pick"}
+	b.btnRoleOther = tele.Btn{Unique: "role_other", Text: "✏️ Другое"}
+
+	b.btnAdminCalendar = tele.Btn{Unique: "admin_calendar", Text: "📅 Google-календарь"}
+	b.btnAdminCalendarEdit = tele.Btn{Unique: "admin_calendar_edit", Text: "✏️ Изменить"}
+	b.btnAdminWorkHours = tele.Btn{Unique: "admin_workhours", Text: "🕐 Рабочие часы"}
+	b.btnAdminWorkHoursPick = tele.Btn{Unique: "admin_workhours_pick"}
+	b.btnAdminEmployees = tele.Btn{Unique: "admin_employees", Text: "👥 Сотрудники"}
+	b.btnAdminBack = tele.Btn{Unique: "admin_back", Text: "◀ Назад"}
+	b.btnAdminInputCancel = tele.Btn{Unique: "admin_input_cancel", Text: "✖️ Отмена"}
+
 	menu := &tele.ReplyMarkup{
 		ResizeKeyboard: true,
 		IsPersistent:   true,
@@ -202,6 +251,17 @@ func (b *Bot) initButtons() {
 		menu.Row(menu.Text("🗓 Расписание команды"), menu.Text("👤 Профиль")),
 	)
 	b.mainMenuKeyboard = menu
+
+	adminMenu := &tele.ReplyMarkup{
+		ResizeKeyboard: true,
+		IsPersistent:   true,
+	}
+	adminMenu.Reply(
+		adminMenu.Row(adminMenu.Text("➕ Создать встречу"), adminMenu.Text("📋 Мои встречи")),
+		adminMenu.Row(adminMenu.Text("🗓 Расписание команды"), adminMenu.Text("👤 Профиль")),
+		adminMenu.Row(adminMenu.Text("⚙️ Конфигурация")),
+	)
+	b.adminMenuKeyboard = adminMenu
 }
 
 func (b *Bot) registerHandlers() {
@@ -212,11 +272,11 @@ func (b *Bot) registerHandlers() {
 	b.bot.Handle("📋 Мои встречи", b.handleMyMeetings)
 	b.bot.Handle("➕ Создать встречу", b.handleCreateMeetingStart)
 	b.bot.Handle("🗓 Расписание команды", b.handleScheduleStart)
+	b.bot.Handle("⚙️ Конфигурация", b.handleAdminConfigStart)
 
 	b.bot.Handle(&b.btnUseName, b.handleUseTelegramName)
 	b.bot.Handle(&b.btnEnterName, b.handleEnterName)
-	b.bot.Handle(&b.btnTZMoscow, b.handleTimezoneMoscow)
-	b.bot.Handle(&b.btnTZAlmaty, b.handleTimezoneAlmaty)
+	b.bot.Handle(&b.btnTZPick, b.handleTZPick)
 	b.bot.Handle(&b.btnTZOther, b.handleTimezoneOther)
 	b.bot.Handle(&b.btnEditName, b.handleEditName)
 	b.bot.Handle(&b.btnEditTeam, b.handleEditTeam)
@@ -256,6 +316,19 @@ func (b *Bot) registerHandlers() {
 	b.bot.Handle(&b.btnScheduleMeetingInfo, b.handleScheduleMeetingInfo)
 	b.bot.Handle(&b.btnScheduleBack, b.handleScheduleBack)
 	b.bot.Handle(&b.btnScheduleNoop, b.handleScheduleNoop)
+
+	b.bot.Handle(&b.btnTeamPick, b.handleTeamPick)
+	b.bot.Handle(&b.btnTeamOther, b.handleTeamOther)
+	b.bot.Handle(&b.btnRolePick, b.handleRolePick)
+	b.bot.Handle(&b.btnRoleOther, b.handleRoleOther)
+
+	b.bot.Handle(&b.btnAdminCalendar, b.handleAdminCalendar)
+	b.bot.Handle(&b.btnAdminCalendarEdit, b.handleAdminCalendarEdit)
+	b.bot.Handle(&b.btnAdminWorkHours, b.handleAdminWorkHours)
+	b.bot.Handle(&b.btnAdminWorkHoursPick, b.handleAdminWorkHoursPick)
+	b.bot.Handle(&b.btnAdminEmployees, b.handleAdminEmployees)
+	b.bot.Handle(&b.btnAdminBack, b.handleAdminBack)
+	b.bot.Handle(&b.btnAdminInputCancel, b.handleAdminInputCancel)
 
 	b.bot.Handle(tele.OnText, b.handleText)
 }
@@ -357,6 +430,11 @@ func (b *Bot) handleText(c tele.Context) error {
 		}
 		return b.finishProfileEdit(c, user.TelegramID)
 	default:
+		if b.isAdmin(user.TelegramID) {
+			if field, ok := b.getAdminInput(user.TelegramID); ok {
+				return b.handleAdminInputText(c, user, field, text)
+			}
+		}
 		if draft, ok := b.getDraft(user.TelegramID); ok {
 			return b.handleMeetingDraftText(c, user, draft, text)
 		}
@@ -390,7 +468,7 @@ func (b *Bot) askTeam(c tele.Context) error {
 	if err := b.users.SetRegistrationStep(context.Background(), user.TelegramID, domain.RegistrationStepEnterTeam); err != nil {
 		return err
 	}
-	return c.Send("🏢 Укажите команду или отдел. Например: Маркетинг, Закупки, Контент.")
+	return b.sendTeamOptions(c, "🏢 Выберите команду или отдел:")
 }
 
 func (b *Bot) askRole(c tele.Context) error {
@@ -401,7 +479,7 @@ func (b *Bot) askRole(c tele.Context) error {
 	if err := b.users.SetRegistrationStep(context.Background(), user.TelegramID, domain.RegistrationStepEnterRole); err != nil {
 		return err
 	}
-	return c.Send("💼 Укажите роль. Например: Руководитель, Менеджер, Дизайнер.")
+	return b.sendRoleOptions(c, "💼 Выберите роль:")
 }
 
 func (b *Bot) askTimezone(c tele.Context) error {
@@ -412,43 +490,11 @@ func (b *Bot) askTimezone(c tele.Context) error {
 	if err := b.users.SetRegistrationStep(context.Background(), user.TelegramID, domain.RegistrationStepEnterTimezone); err != nil {
 		return err
 	}
-
-	markup := &tele.ReplyMarkup{}
-	markup.Inline(
-		markup.Row(b.btnTZMoscow, b.btnTZAlmaty),
-		markup.Row(b.btnTZOther),
-	)
-
-	return c.Send("🌍 Выберите часовой пояс.", markup)
-}
-
-func (b *Bot) handleTimezoneMoscow(c tele.Context) error {
-	defer c.Respond()
-	user, err := b.currentUser(c)
-	if err != nil {
-		return err
-	}
-	return b.saveTimezoneAndComplete(c, user, "Europe/Moscow")
-}
-
-func (b *Bot) handleTimezoneAlmaty(c tele.Context) error {
-	defer c.Respond()
-	user, err := b.currentUser(c)
-	if err != nil {
-		return err
-	}
-	return b.saveTimezoneAndComplete(c, user, "Asia/Almaty")
+	return b.sendTimezoneOptions(c, "🌍 Выберите часовой пояс.")
 }
 
 func (b *Bot) handleTimezoneOther(c tele.Context) error {
 	defer c.Respond()
-	user, err := b.currentUser(c)
-	if err != nil {
-		return err
-	}
-	if err := b.users.SetRegistrationStep(context.Background(), user.TelegramID, domain.RegistrationStepEnterTimezone); err != nil {
-		return err
-	}
 	return c.Send("Напишите часовой пояс в формате IANA. Например: Europe/Moscow")
 }
 
@@ -498,15 +544,39 @@ func (b *Bot) handleEditName(c tele.Context) error {
 }
 
 func (b *Bot) handleEditTeam(c tele.Context) error {
-	return b.setEditStep(c, domain.RegistrationStepEditTeam, "🏢 Напишите новую команду или отдел.")
+	defer c.Respond()
+	user, err := b.currentUser(c)
+	if err != nil {
+		return err
+	}
+	if err := b.users.SetRegistrationStep(context.Background(), user.TelegramID, domain.RegistrationStepEditTeam); err != nil {
+		return err
+	}
+	return b.sendTeamOptions(c, "🏢 Выберите новую команду или отдел:")
 }
 
 func (b *Bot) handleEditRole(c tele.Context) error {
-	return b.setEditStep(c, domain.RegistrationStepEditRole, "💼 Напишите новую роль.")
+	defer c.Respond()
+	user, err := b.currentUser(c)
+	if err != nil {
+		return err
+	}
+	if err := b.users.SetRegistrationStep(context.Background(), user.TelegramID, domain.RegistrationStepEditRole); err != nil {
+		return err
+	}
+	return b.sendRoleOptions(c, "💼 Выберите новую роль:")
 }
 
 func (b *Bot) handleEditTimezone(c tele.Context) error {
-	return b.setEditStep(c, domain.RegistrationStepEditTimezone, "🌍 Напишите часовой пояс. Например: Europe/Moscow")
+	defer c.Respond()
+	user, err := b.currentUser(c)
+	if err != nil {
+		return err
+	}
+	if err := b.users.SetRegistrationStep(context.Background(), user.TelegramID, domain.RegistrationStepEditTimezone); err != nil {
+		return err
+	}
+	return b.sendTimezoneOptions(c, "🌍 Выберите новый часовой пояс.")
 }
 
 func (b *Bot) setEditStep(c tele.Context, step string, prompt string) error {
@@ -553,7 +623,7 @@ func (b *Bot) handleMyMeetings(c tele.Context) error {
 }
 
 func (b *Bot) sendMainMenu(c tele.Context, user domain.User) error {
-	return c.Send(formatMainMenu(user), b.mainMenuKeyboard)
+	return c.Send(formatMainMenu(user), b.menuKeyboardFor(user))
 }
 
 func (b *Bot) currentUser(c tele.Context) (domain.User, error) {

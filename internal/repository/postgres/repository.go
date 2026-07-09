@@ -113,6 +113,10 @@ func (r *Repository) ensureSchema(ctx context.Context) error {
 		)`,
 		`ALTER TABLE meetings ADD COLUMN IF NOT EXISTS google_event_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE meetings ADD COLUMN IF NOT EXISTS meet_link TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL DEFAULT ''
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_meetings_starts_at ON meetings (starts_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_meetings_ends_at ON meetings (ends_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_meeting_participants_user_id ON meeting_participants (user_id)`,
@@ -125,6 +129,26 @@ func (r *Repository) ensureSchema(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (r *Repository) GetSetting(ctx context.Context, key string) (string, error) {
+	var value string
+	err := r.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = $1`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func (r *Repository) SetSetting(ctx context.Context, key string, value string) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO settings (key, value) VALUES ($1, $2)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+	`, key, value)
+	return err
 }
 
 func (r *Repository) Upsert(ctx context.Context, user domain.User) (domain.User, error) {

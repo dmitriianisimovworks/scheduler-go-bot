@@ -1,6 +1,10 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strconv"
+	"strings"
+)
 
 type Config struct {
 	AppEnv                  string
@@ -21,6 +25,7 @@ type Config struct {
 	GoogleOAuthClientSecret string
 	GoogleOAuthRefreshToken string
 	GoogleCalendarID        string
+	AdminTelegramIDs        []int64
 }
 
 func Load() Config {
@@ -43,6 +48,7 @@ func Load() Config {
 		GoogleOAuthClientSecret: getenv("GOOGLE_OAUTH_CLIENT_SECRET", ""),
 		GoogleOAuthRefreshToken: getenv("GOOGLE_OAUTH_REFRESH_TOKEN", ""),
 		GoogleCalendarID:        getenv("GOOGLE_CALENDAR_ID", ""),
+		AdminTelegramIDs:        parseInt64List(getenv("ADMIN_TELEGRAM_IDS", "")),
 	}
 }
 
@@ -52,4 +58,18 @@ func getenv(key, fallback string) string {
 	}
 
 	return fallback
+}
+
+func parseInt64List(value string) []int64 {
+	var ids []int64
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if id, err := strconv.ParseInt(part, 10, 64); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

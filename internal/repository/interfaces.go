@@ -18,6 +18,11 @@ type UserRepository interface {
 	UpdateTimezone(ctx context.Context, telegramID int64, timezone string) error
 }
 
+type SettingsRepository interface {
+	GetSetting(ctx context.Context, key string) (string, error)
+	SetSetting(ctx context.Context, key string, value string) error
+}
+
 type MeetingRepository interface {
 	Create(ctx context.Context, meeting domain.Meeting) (domain.Meeting, error)
 	ListUpcomingForUser(ctx context.Context, userID int64, from time.Time, limit int) ([]domain.Meeting, error)

@@ -34,7 +34,7 @@ func buildContainer() (*App, error) {
 	}
 	sheetsClient := sheets.New(cfg)
 	calendarClient := calendar.New(cfg)
-	tg := telegram.New(cfg, log, clk, repo, repo, sheetsClient, calendarClient)
+	tg := telegram.New(cfg, log, clk, repo, repo, repo, sheetsClient, calendarClient)
 	httpServer := apphttp.NewServer(cfg, log, tg)
 
 	return &App{

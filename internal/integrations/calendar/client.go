@@ -3,6 +3,7 @@ package calendar
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -15,6 +16,7 @@ import (
 )
 
 type Client struct {
+	mu          sync.RWMutex
 	calendarID  string
 	tokenSource oauth2.TokenSource
 	enabled     bool
@@ -40,6 +42,18 @@ func New(cfg config.Config) *Client {
 
 func (c *Client) Enabled() bool {
 	return c.enabled
+}
+
+func (c *Client) CalendarID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.calendarID
+}
+
+func (c *Client) SetCalendarID(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calendarID = id
 }
 
 func (c *Client) service(ctx context.Context) (*gcal.Service, error) {
@@ -68,7 +82,7 @@ func (c *Client) CreateEvent(ctx context.Context, input usecase.CalendarEventInp
 		},
 	}
 
-	created, err := srv.Events.Insert(c.calendarID, event).ConferenceDataVersion(1).Do()
+	created, err := srv.Events.Insert(c.CalendarID(), event).ConferenceDataVersion(1).Do()
 	if err != nil {
 		return usecase.CalendarEvent{}, err
 	}
@@ -86,5 +100,5 @@ func (c *Client) DeleteEvent(ctx context.Context, eventID string) error {
 		return err
 	}
 
-	return srv.Events.Delete(c.calendarID, eventID).Do()
+	return srv.Events.Delete(c.CalendarID(), eventID).Do()
 }

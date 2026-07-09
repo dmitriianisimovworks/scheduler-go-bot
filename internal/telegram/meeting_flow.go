@@ -25,10 +25,8 @@ const (
 )
 
 const (
-	workdayStartHour = 9
-	workdayEndHour   = 19
-	timeSlotStep     = 30 * time.Minute
-	maxMonthsAhead   = 12
+	timeSlotStep   = 30 * time.Minute
+	maxMonthsAhead = 12
 )
 
 var ruMonths = [...]string{
@@ -109,13 +107,13 @@ func (b *Bot) handleDraftCancel(c tele.Context) error {
 		return err
 	}
 	b.clearDraft(user.TelegramID)
-	return c.Send("Создание встречи отменено.", b.mainMenuKeyboard)
+	return c.Send("Создание встречи отменено.", b.menuKeyboardFor(user))
 }
 
 func (b *Bot) handleMeetingDraftText(c tele.Context, user domain.User, draft *meetingDraft, text string) error {
 	if strings.EqualFold(text, "отмена") || strings.EqualFold(text, "cancel") {
 		b.clearDraft(user.TelegramID)
-		return c.Send("Создание встречи отменено.", b.mainMenuKeyboard)
+		return c.Send("Создание встречи отменено.", b.menuKeyboardFor(user))
 	}
 
 	loc := b.userLocation(user)
@@ -240,7 +238,8 @@ func (b *Bot) askMeetingDuration(c tele.Context) error {
 func (b *Bot) askMeetingTime(c tele.Context, user domain.User, draft *meetingDraft) error {
 	loc := b.userLocation(user)
 	now := b.clock.Now().In(loc)
-	slots := timeSlots(draft.date, now)
+	startHour, endHour := b.workdayWindow()
+	slots := timeSlots(draft.date, now, startHour, endHour)
 
 	if len(slots) == 0 {
 		draft.step = draftStepDate
@@ -266,12 +265,12 @@ func (b *Bot) askMeetingTime(c tele.Context, user domain.User, draft *meetingDra
 	return c.Send("🕐 Время начала?", markup)
 }
 
-func timeSlots(date time.Time, now time.Time) []string {
+func timeSlots(date time.Time, now time.Time, startHour int, endHour int) []string {
 	isToday := startOfDay(date).Equal(startOfDay(now))
 	var slots []string
-	for h := workdayStartHour; h <= workdayEndHour; h++ {
+	for h := startHour; h <= endHour; h++ {
 		for m := 0; m < 60; m += int(timeSlotStep / time.Minute) {
-			if h == workdayEndHour && m > 0 {
+			if h == endHour && m > 0 {
 				break
 			}
 			if isToday && (h < now.Hour() || (h == now.Hour() && m <= now.Minute())) {
@@ -599,7 +598,7 @@ func (b *Bot) renderMyMeetings(c tele.Context, user domain.User) error {
 		return err
 	}
 	if len(meetings) == 0 {
-		return c.Send("📋 Предстоящих встреч нет.", b.mainMenuKeyboard)
+		return c.Send("📋 Предстоящих встреч нет.", b.menuKeyboardFor(user))
 	}
 
 	sort.Slice(meetings, func(i, j int) bool {

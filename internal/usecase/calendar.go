@@ -9,6 +9,8 @@ type CalendarClient interface {
 	Enabled() bool
 	CreateEvent(ctx context.Context, input CalendarEventInput) (CalendarEvent, error)
 	DeleteEvent(ctx context.Context, eventID string) error
+	CalendarID() string
+	SetCalendarID(id string)
 }
 
 type CalendarEventInput struct {

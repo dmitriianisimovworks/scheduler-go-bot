@@ -28,6 +28,7 @@ type Bot struct {
 	createMeeting  usecase.CreateMeeting
 	listMyMeetings usecase.ListMyMeetings
 	cancelMeeting  usecase.CancelMeeting
+	listSchedule   usecase.ListSchedule
 
 	draftsMu sync.Mutex
 	drafts   map[int64]*meetingDraft
@@ -63,6 +64,19 @@ type Bot struct {
 	btnMyMeetingCancelConfirm tele.Btn
 	btnMyMeetingCancelDecline tele.Btn
 
+	btnScheduleToday       tele.Btn
+	btnScheduleTomorrow    tele.Btn
+	btnScheduleWeek        tele.Btn
+	btnScheduleOtherDay    tele.Btn
+	btnSchedulePick        tele.Btn
+	btnScheduleCalPrev     tele.Btn
+	btnScheduleCalNext     tele.Btn
+	btnScheduleDayPrev     tele.Btn
+	btnScheduleDayNext     tele.Btn
+	btnScheduleMeetingInfo tele.Btn
+	btnScheduleBack        tele.Btn
+	btnScheduleNoop        tele.Btn
+
 	mainMenuKeyboard *tele.ReplyMarkup
 }
 
@@ -83,6 +97,7 @@ func New(
 		createMeeting:  usecase.NewCreateMeeting(meetings, calendarClient),
 		listMyMeetings: usecase.NewListMyMeetings(meetings),
 		cancelMeeting:  usecase.NewCancelMeeting(meetings, calendarClient),
+		listSchedule:   usecase.NewListSchedule(meetings),
 		drafts:         make(map[int64]*meetingDraft),
 	}
 	b.initButtons()
@@ -165,13 +180,26 @@ func (b *Bot) initButtons() {
 	b.btnMyMeetingCancelConfirm = tele.Btn{Unique: "my_meeting_cancel_confirm", Text: "✅ Да, отменить"}
 	b.btnMyMeetingCancelDecline = tele.Btn{Unique: "my_meeting_cancel_decline", Text: "Отмена"}
 
+	b.btnScheduleToday = tele.Btn{Unique: "sched_today", Text: "Сегодня"}
+	b.btnScheduleTomorrow = tele.Btn{Unique: "sched_tomorrow", Text: "Завтра"}
+	b.btnScheduleWeek = tele.Btn{Unique: "sched_week", Text: "Неделя"}
+	b.btnScheduleOtherDay = tele.Btn{Unique: "sched_other_day", Text: "📆 Другой день"}
+	b.btnSchedulePick = tele.Btn{Unique: "sched_pick"}
+	b.btnScheduleCalPrev = tele.Btn{Unique: "sched_cal_prev"}
+	b.btnScheduleCalNext = tele.Btn{Unique: "sched_cal_next"}
+	b.btnScheduleDayPrev = tele.Btn{Unique: "sched_day_prev"}
+	b.btnScheduleDayNext = tele.Btn{Unique: "sched_day_next"}
+	b.btnScheduleMeetingInfo = tele.Btn{Unique: "sched_meeting_info"}
+	b.btnScheduleBack = tele.Btn{Unique: "sched_back"}
+	b.btnScheduleNoop = tele.Btn{Unique: "sched_noop"}
+
 	menu := &tele.ReplyMarkup{
 		ResizeKeyboard: true,
 		IsPersistent:   true,
 	}
 	menu.Reply(
 		menu.Row(menu.Text("➕ Создать встречу"), menu.Text("📋 Мои встречи")),
-		menu.Row(menu.Text("👤 Профиль"), menu.Text("❓ Помощь")),
+		menu.Row(menu.Text("🗓 Расписание команды"), menu.Text("👤 Профиль")),
 	)
 	b.mainMenuKeyboard = menu
 }
@@ -179,12 +207,11 @@ func (b *Bot) initButtons() {
 func (b *Bot) registerHandlers() {
 	b.bot.Handle("/start", b.handleStart)
 	b.bot.Handle("/profile", b.handleProfile)
-	b.bot.Handle("/help", b.handleHelp)
 
 	b.bot.Handle("👤 Профиль", b.handleProfile)
-	b.bot.Handle("❓ Помощь", b.handleHelp)
 	b.bot.Handle("📋 Мои встречи", b.handleMyMeetings)
 	b.bot.Handle("➕ Создать встречу", b.handleCreateMeetingStart)
+	b.bot.Handle("🗓 Расписание команды", b.handleScheduleStart)
 
 	b.bot.Handle(&b.btnUseName, b.handleUseTelegramName)
 	b.bot.Handle(&b.btnEnterName, b.handleEnterName)
@@ -216,6 +243,19 @@ func (b *Bot) registerHandlers() {
 	b.bot.Handle(&b.btnMyMeetingCancelAsk, b.handleMyMeetingCancelAsk)
 	b.bot.Handle(&b.btnMyMeetingCancelConfirm, b.handleMyMeetingCancelConfirm)
 	b.bot.Handle(&b.btnMyMeetingCancelDecline, b.handleMyMeetingCancelDecline)
+
+	b.bot.Handle(&b.btnScheduleToday, b.handleScheduleToday)
+	b.bot.Handle(&b.btnScheduleTomorrow, b.handleScheduleTomorrow)
+	b.bot.Handle(&b.btnScheduleWeek, b.handleScheduleWeek)
+	b.bot.Handle(&b.btnScheduleOtherDay, b.handleScheduleOtherDay)
+	b.bot.Handle(&b.btnSchedulePick, b.handleSchedulePick)
+	b.bot.Handle(&b.btnScheduleCalPrev, b.handleScheduleCalPrev)
+	b.bot.Handle(&b.btnScheduleCalNext, b.handleScheduleCalNext)
+	b.bot.Handle(&b.btnScheduleDayPrev, b.handleScheduleDayPrev)
+	b.bot.Handle(&b.btnScheduleDayNext, b.handleScheduleDayNext)
+	b.bot.Handle(&b.btnScheduleMeetingInfo, b.handleScheduleMeetingInfo)
+	b.bot.Handle(&b.btnScheduleBack, b.handleScheduleBack)
+	b.bot.Handle(&b.btnScheduleNoop, b.handleScheduleNoop)
 
 	b.bot.Handle(tele.OnText, b.handleText)
 }
@@ -510,10 +550,6 @@ func (b *Bot) handleMyMeetings(c tele.Context) error {
 		return b.handleStart(c)
 	}
 	return b.renderMyMeetings(c, user)
-}
-
-func (b *Bot) handleHelp(c tele.Context) error {
-	return c.Send("❓ Я помогу вести календарь встреч команды.\n\nСейчас доступно: регистрация, профиль, создание встреч с проверкой конфликтов, список моих ближайших встреч, отмена своих встреч.", b.mainMenuKeyboard)
 }
 
 func (b *Bot) sendMainMenu(c tele.Context, user domain.User) error {

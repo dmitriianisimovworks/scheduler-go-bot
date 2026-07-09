@@ -21,6 +21,7 @@ type UserRepository interface {
 type MeetingRepository interface {
 	Create(ctx context.Context, meeting domain.Meeting) (domain.Meeting, error)
 	ListUpcomingForUser(ctx context.Context, userID int64, from time.Time, limit int) ([]domain.Meeting, error)
+	ListByDateRange(ctx context.Context, from time.Time, to time.Time) ([]domain.Meeting, error)
 	Cancel(ctx context.Context, meetingID int64, requesterID int64) (domain.Meeting, error)
 	HasConflict(ctx context.Context, participantIDs []int64, startsAt time.Time, endsAt time.Time) (bool, error)
 }

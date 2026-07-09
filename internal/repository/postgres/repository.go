@@ -337,6 +337,21 @@ func (r *Repository) ListUpcomingForUser(ctx context.Context, userID int64, from
 	return r.scanMeetings(ctx, rows)
 }
 
+func (r *Repository) ListByDateRange(ctx context.Context, from time.Time, to time.Time) ([]domain.Meeting, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, title, creator_id, starts_at, ends_at, google_event_id, meet_link
+		FROM meetings
+		WHERE starts_at >= $1 AND starts_at < $2
+		ORDER BY starts_at
+	`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return r.scanMeetings(ctx, rows)
+}
+
 func (r *Repository) scanMeetings(ctx context.Context, rows *sql.Rows) ([]domain.Meeting, error) {
 	var meetings []domain.Meeting
 	for rows.Next() {

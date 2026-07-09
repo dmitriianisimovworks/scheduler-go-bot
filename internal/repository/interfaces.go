@@ -24,11 +24,15 @@ type SettingsRepository interface {
 }
 
 type MeetingRepository interface {
-	Create(ctx context.Context, meeting domain.Meeting) (domain.Meeting, error)
+	// CreateIfNoConflict atomically checks for a scheduling conflict among
+	// participantIDs and inserts the meeting, closing the check-then-insert
+	// race between a separate conflict check and insert. The returned bool
+	// reports whether a conflict was found (in which case no row is created).
+	CreateIfNoConflict(ctx context.Context, meeting domain.Meeting, participantIDs []int64) (domain.Meeting, bool, error)
+	UpdateGoogleEvent(ctx context.Context, meetingID int64, googleEventID string, meetLink string) error
 	ListUpcomingForUser(ctx context.Context, userID int64, from time.Time, limit int) ([]domain.Meeting, error)
 	ListByDateRange(ctx context.Context, from time.Time, to time.Time) ([]domain.Meeting, error)
 	Cancel(ctx context.Context, meetingID int64, requesterID int64) (domain.Meeting, error)
-	HasConflict(ctx context.Context, participantIDs []int64, startsAt time.Time, endsAt time.Time) (bool, error)
 	IsReminderSent(ctx context.Context, meetingID int64, threshold string) (bool, error)
 	MarkReminderSent(ctx context.Context, meetingID int64, threshold string) error
 }

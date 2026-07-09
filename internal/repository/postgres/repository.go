@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -218,12 +219,16 @@ func (r *Repository) GetByTelegramID(ctx context.Context, telegramID int64) (dom
 }
 
 func (r *Repository) ListRegistered(ctx context.Context) ([]domain.User, error) {
+	// registered_at (not registration_step) is the durable "onboarding
+	// finished" flag — registration_step doubles as transient state for
+	// in-progress profile edits, so filtering on it here would drop a user
+	// who abandoned an edit mid-flow.
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, telegram_id, username, first_name, last_name, full_name, display_name, team, role, timezone, registration_step, registered_at, last_seen_at
 		FROM users
-		WHERE registration_step = $1
+		WHERE registered_at IS NOT NULL
 		ORDER BY display_name
-	`, domain.RegistrationStepComplete)
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -311,12 +316,48 @@ func scanUser(row scanner) (domain.User, error) {
 	return user, nil
 }
 
-func (r *Repository) Create(ctx context.Context, meeting domain.Meeting) (domain.Meeting, error) {
+// CreateIfNoConflict runs the conflict check and the insert inside one
+// transaction, taking a Postgres advisory lock per involved user first. This
+// closes the race where two concurrent creates for overlapping participants
+// could both pass a standalone conflict check before either had inserted its
+// row. Locks are acquired in sorted order to avoid deadlocking with another
+// concurrent transaction locking the same set of users.
+func (r *Repository) CreateIfNoConflict(ctx context.Context, meeting domain.Meeting, participantIDs []int64) (domain.Meeting, bool, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return domain.Meeting{}, err
+		return domain.Meeting{}, false, err
 	}
 	defer tx.Rollback()
+
+	lockIDs := append([]int64{}, participantIDs...)
+	sort.Slice(lockIDs, func(i, j int) bool { return lockIDs[i] < lockIDs[j] })
+	for _, id := range lockIDs {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, id); err != nil {
+			return domain.Meeting{}, false, err
+		}
+	}
+
+	var conflict bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM meetings m
+			WHERE m.starts_at < $2 AND m.ends_at > $1
+			AND (
+				m.creator_id = ANY($3)
+				OR EXISTS (
+					SELECT 1 FROM meeting_participants mp
+					WHERE mp.meeting_id = m.id AND mp.user_id = ANY($3)
+				)
+			)
+		)
+	`, meeting.StartsAt, meeting.EndsAt, participantIDs).Scan(&conflict)
+	if err != nil {
+		return domain.Meeting{}, false, err
+	}
+	if conflict {
+		return domain.Meeting{}, true, nil
+	}
 
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO meetings (title, creator_id, starts_at, ends_at, google_event_id, meet_link)
@@ -324,7 +365,7 @@ func (r *Repository) Create(ctx context.Context, meeting domain.Meeting) (domain
 		RETURNING id
 	`, meeting.Title, meeting.CreatorID, meeting.StartsAt, meeting.EndsAt, meeting.GoogleEventID, meeting.MeetLink).Scan(&meeting.ID)
 	if err != nil {
-		return domain.Meeting{}, err
+		return domain.Meeting{}, false, err
 	}
 
 	for _, participantID := range meeting.ParticipantIDs {
@@ -333,15 +374,26 @@ func (r *Repository) Create(ctx context.Context, meeting domain.Meeting) (domain
 			VALUES ($1, $2)
 			ON CONFLICT DO NOTHING
 		`, meeting.ID, participantID); err != nil {
-			return domain.Meeting{}, err
+			return domain.Meeting{}, false, err
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return domain.Meeting{}, err
+		return domain.Meeting{}, false, err
 	}
 
-	return meeting, nil
+	return meeting, false, nil
+}
+
+// UpdateGoogleEvent persists a Google Calendar event id/Meet link onto an
+// already-created meeting. Called after CreateIfNoConflict so a failure to
+// reach Google never leaves an orphaned Calendar event un-tracked by the
+// bot — the meeting row is the source of truth and always exists first.
+func (r *Repository) UpdateGoogleEvent(ctx context.Context, meetingID int64, googleEventID string, meetLink string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE meetings SET google_event_id = $2, meet_link = $3 WHERE id = $1
+	`, meetingID, googleEventID, meetLink)
+	return err
 }
 
 func (r *Repository) ListUpcomingForUser(ctx context.Context, userID int64, from time.Time, limit int) ([]domain.Meeting, error) {
@@ -450,28 +502,4 @@ func (r *Repository) MarkReminderSent(ctx context.Context, meetingID int64, thre
 		ON CONFLICT (meeting_id, threshold) DO NOTHING
 	`, meetingID, threshold)
 	return err
-}
-
-func (r *Repository) HasConflict(ctx context.Context, participantIDs []int64, startsAt time.Time, endsAt time.Time) (bool, error) {
-	if len(participantIDs) == 0 {
-		return false, nil
-	}
-
-	var exists bool
-	err := r.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM meetings m
-			WHERE m.starts_at < $2 AND m.ends_at > $1
-			AND (
-				m.creator_id = ANY($3)
-				OR EXISTS (
-					SELECT 1 FROM meeting_participants mp
-					WHERE mp.meeting_id = m.id AND mp.user_id = ANY($3)
-				)
-			)
-		)
-	`, startsAt, endsAt, participantIDs).Scan(&exists)
-
-	return exists, err
 }

@@ -94,6 +94,7 @@ func (b *Bot) handleCreateMeetingStart(c tele.Context) error {
 	if !user.IsRegistered() {
 		return b.sendMainMenu(c, user)
 	}
+	user = b.clearDanglingEdit(context.Background(), user)
 
 	b.setDraft(user.TelegramID, &meetingDraft{step: draftStepTitle})
 	markup := &tele.ReplyMarkup{}

@@ -93,6 +93,7 @@ func (b *Bot) handleScheduleStart(c tele.Context) error {
 	if !user.IsRegistered() {
 		return b.sendMainMenu(c, user)
 	}
+	user = b.clearDanglingEdit(context.Background(), user)
 
 	markup := &tele.ReplyMarkup{}
 	markup.Inline(

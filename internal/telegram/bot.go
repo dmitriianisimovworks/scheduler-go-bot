@@ -35,6 +35,16 @@ type Bot struct {
 	draftsMu sync.Mutex
 	drafts   map[int64]*meetingDraft
 
+	// processMu serializes update handling. Synchronous: true in tele.Settings
+	// only applies to telebot's own polling loop (Start()) — this deployment
+	// runs on webhooks, where ProcessUpdate is invoked directly per HTTP
+	// request, each on its own goroutine, bypassing that setting entirely.
+	// Without this lock, concurrent updates for the same or different users
+	// can race on shared mutable state (meetingDraft fields, adminInput,
+	// workday hours) since draftsMu/adminInputMu only guard map access, not
+	// the read-modify-write sequences handlers perform on the values.
+	processMu sync.Mutex
+
 	adminIDs map[int64]bool
 
 	workdayMu        sync.RWMutex
@@ -183,6 +193,8 @@ func (b *Bot) ProcessUpdate(update tele.Update) {
 		b.logger.Printf("telegram update skipped: bot is not ready")
 		return
 	}
+	b.processMu.Lock()
+	defer b.processMu.Unlock()
 	b.bot.ProcessUpdate(update)
 }
 
@@ -630,6 +642,7 @@ func (b *Bot) handleMyMeetings(c tele.Context) error {
 	if err != nil {
 		return b.handleStart(c)
 	}
+	user = b.clearDanglingEdit(context.Background(), user)
 	return b.renderMyMeetings(c, user)
 }
 
@@ -667,6 +680,31 @@ func (b *Bot) currentUser(c tele.Context) (domain.User, error) {
 		return domain.User{}, fmt.Errorf("telegram sender is empty")
 	}
 	return b.users.GetByTelegramID(context.Background(), sender.ID)
+}
+
+func isDanglingEditStep(step string) bool {
+	switch step {
+	case domain.RegistrationStepEditName,
+		domain.RegistrationStepEditTeam,
+		domain.RegistrationStepEditRole,
+		domain.RegistrationStepEditTimezone:
+		return true
+	}
+	return false
+}
+
+// clearDanglingEdit resets a profile edit that was left in progress (the
+// user tapped a main-menu button instead of finishing the edit), so a
+// stray free-text message later isn't misrouted as a profile field update.
+func (b *Bot) clearDanglingEdit(ctx context.Context, user domain.User) domain.User {
+	if !isDanglingEditStep(user.RegistrationStep) {
+		return user
+	}
+	if err := b.users.SetRegistrationStep(ctx, user.TelegramID, domain.RegistrationStepComplete); err != nil {
+		return user
+	}
+	user.RegistrationStep = domain.RegistrationStepComplete
+	return user
 }
 
 func userFromTelegram(user *tele.User, timezone string) domain.User {

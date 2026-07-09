@@ -43,14 +43,6 @@ func (uc CreateMeeting) Execute(ctx context.Context, input CreateMeetingInput) (
 	}
 
 	participantIDs := append([]int64{input.CreatorID}, input.ParticipantIDs...)
-	hasConflict, err := uc.repo.HasConflict(ctx, participantIDs, input.StartsAt, input.EndsAt)
-	if err != nil {
-		return domain.Meeting{}, err
-	}
-	if hasConflict {
-		return domain.Meeting{}, ErrConflict
-	}
-
 	meeting := domain.Meeting{
 		Title:          input.Title,
 		CreatorID:      input.CreatorID,
@@ -59,18 +51,31 @@ func (uc CreateMeeting) Execute(ctx context.Context, input CreateMeetingInput) (
 		EndsAt:         input.EndsAt,
 	}
 
+	created, conflict, err := uc.repo.CreateIfNoConflict(ctx, meeting, participantIDs)
+	if err != nil {
+		return domain.Meeting{}, err
+	}
+	if conflict {
+		return domain.Meeting{}, ErrConflict
+	}
+
+	// Calendar sync happens after the row exists, and its failure is
+	// non-fatal: the meeting is already the source of truth in the DB, so a
+	// Google API hiccup here just means it's missing a Meet link, not an
+	// orphaned Calendar event with no corresponding meeting.
 	if uc.calendar != nil && uc.calendar.Enabled() {
 		event, err := uc.calendar.CreateEvent(ctx, CalendarEventInput{
 			Title:    input.Title,
 			StartsAt: input.StartsAt,
 			EndsAt:   input.EndsAt,
 		})
-		if err != nil {
-			return domain.Meeting{}, err
+		if err == nil {
+			if updErr := uc.repo.UpdateGoogleEvent(ctx, created.ID, event.EventID, event.MeetLink); updErr == nil {
+				created.GoogleEventID = event.EventID
+				created.MeetLink = event.MeetLink
+			}
 		}
-		meeting.GoogleEventID = event.EventID
-		meeting.MeetLink = event.MeetLink
 	}
 
-	return uc.repo.Create(ctx, meeting)
+	return created, nil
 }

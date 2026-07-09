@@ -31,6 +31,11 @@ type User struct {
 	LastSeenAt       time.Time
 }
 
+// IsRegistered reports whether onboarding was ever completed. It is based on
+// RegisteredAt (set once, permanently) rather than RegistrationStep, because
+// RegistrationStep is also used as transient state for in-progress profile
+// edits (e.g. EditTeam) — a user who abandons an edit mid-flow (taps another
+// menu button instead of finishing it) must not lose access to core features.
 func (u User) IsRegistered() bool {
-	return u.RegistrationStep == RegistrationStepComplete
+	return !u.RegisteredAt.IsZero()
 }

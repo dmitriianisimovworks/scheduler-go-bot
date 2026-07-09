@@ -9,18 +9,19 @@ import (
 	"meeting-bot/internal/domain"
 )
 
-func formatMainMenu(user domain.User) string {
+func formatMainMenu(user domain.User, todaysMeetingCount int) string {
 	name := valueOrDash(user.DisplayName)
 	team := valueOrDash(user.Team)
 	role := valueOrDash(user.Role)
 	timezone := valueOrDash(user.Timezone)
 
 	return fmt.Sprintf(
-		"👋 %s, рабочее меню\n\nКоманда: %s\nРоль: %s\nЧасовой пояс: %s\nСегодня встреч: 0",
+		"👋 %s, рабочее меню\n\nКоманда: %s\nРоль: %s\nЧасовой пояс: %s\nСегодня встреч: %d",
 		name,
 		team,
 		role,
 		timezone,
+		todaysMeetingCount,
 	)
 }
 

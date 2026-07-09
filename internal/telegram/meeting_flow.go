@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -529,6 +530,7 @@ func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetin
 	}
 
 	b.clearDraft(user.TelegramID)
+	b.notifyParticipants(meeting, user, candidates)
 
 	loc := b.userLocation(user)
 	summary := fmt.Sprintf(
@@ -545,11 +547,62 @@ func (b *Bot) finishMeetingDraft(c tele.Context, user domain.User, draft *meetin
 	if meeting.MeetLink != "" {
 		summary += fmt.Sprintf("\n\n🔗 Google Meet: %s", meeting.MeetLink)
 	}
+	if link := b.calendarViewLink(); link != "" {
+		summary += fmt.Sprintf("\n\n📆 Календарь команды: %s", link)
+	}
 
 	if err := c.Send(summary); err != nil {
 		return err
 	}
 	return b.sendMainMenu(c, user)
+}
+
+func (b *Bot) calendarViewLink() string {
+	id := b.calendar.CalendarID()
+	if id == "" {
+		return ""
+	}
+	return "https://calendar.google.com/calendar/embed?src=" + url.QueryEscape(id)
+}
+
+func (b *Bot) notifyParticipants(meeting domain.Meeting, organizer domain.User, candidates []domain.User) {
+	if len(meeting.ParticipantIDs) == 0 {
+		return
+	}
+
+	byID := make(map[int64]domain.User, len(candidates))
+	for _, candidate := range candidates {
+		byID[candidate.ID] = candidate
+	}
+
+	organizerName := valueOrDash(organizer.DisplayName)
+
+	for _, id := range meeting.ParticipantIDs {
+		participant, ok := byID[id]
+		if !ok || participant.TelegramID == 0 {
+			continue
+		}
+
+		loc := b.userLocation(participant)
+		text := fmt.Sprintf(
+			"📅 Вас пригласили на встречу\n\n%s\n%s, %s–%s\n\n👤 Организатор: %s",
+			meeting.Title,
+			meeting.StartsAt.In(loc).Format("02.01.2006"),
+			meeting.StartsAt.In(loc).Format("15:04"),
+			meeting.EndsAt.In(loc).Format("15:04"),
+			organizerName,
+		)
+		if meeting.MeetLink != "" {
+			text += fmt.Sprintf("\n\n🔗 Google Meet: %s", meeting.MeetLink)
+		}
+		if link := b.calendarViewLink(); link != "" {
+			text += fmt.Sprintf("\n\n📆 Календарь команды: %s", link)
+		}
+
+		if err := b.SendReminder(participant.TelegramID, text); err != nil {
+			b.logger.Printf("notify participant %d about meeting %d: %v", participant.TelegramID, meeting.ID, err)
+		}
+	}
 }
 
 func parseMeetingDate(text string, loc *time.Location, now time.Time) (time.Time, error) {

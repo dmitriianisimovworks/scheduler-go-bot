@@ -218,13 +218,12 @@ func (b *Bot) handleAdminWorkHours(c tele.Context) error {
 }
 
 func (b *Bot) handleAdminWorkHoursPick(c tele.Context) error {
-	defer c.Respond()
 	user, err := b.currentUser(c)
 	if err != nil {
 		return err
 	}
 	if !b.isAdmin(user.TelegramID) {
-		return nil
+		return c.Respond()
 	}
 
 	parts := strings.Split(c.Data(), "-")
@@ -245,6 +244,9 @@ func (b *Bot) handleAdminWorkHoursPick(c tele.Context) error {
 		return err
 	}
 
+	if err := c.RespondText(fmt.Sprintf("✅ Применено: %02d:00–%02d:00", start, end)); err != nil {
+		return err
+	}
 	return b.renderAdminConfig(c, user)
 }
 

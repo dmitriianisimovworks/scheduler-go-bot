@@ -634,7 +634,31 @@ func (b *Bot) handleMyMeetings(c tele.Context) error {
 }
 
 func (b *Bot) sendMainMenu(c tele.Context, user domain.User) error {
-	return c.Send(formatMainMenu(user), b.menuKeyboardFor(user))
+	count, err := b.todaysMeetingCount(context.Background(), user)
+	if err != nil {
+		count = 0
+	}
+	return c.Send(formatMainMenu(user, count), b.menuKeyboardFor(user))
+}
+
+func (b *Bot) todaysMeetingCount(ctx context.Context, user domain.User) (int, error) {
+	loc := b.userLocation(user)
+	now := b.clock.Now().In(loc)
+	from := startOfDay(now)
+	to := from.AddDate(0, 0, 1)
+
+	meetings, err := b.listSchedule.Execute(ctx, from, to)
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, meeting := range meetings {
+		if meeting.CreatorID == user.ID || containsID(meeting.ParticipantIDs, user.ID) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (b *Bot) currentUser(c tele.Context) (domain.User, error) {

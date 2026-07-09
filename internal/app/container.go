@@ -7,6 +7,7 @@ import (
 	apphttp "meeting-bot/internal/http"
 	"meeting-bot/internal/integrations/calendar"
 	"meeting-bot/internal/integrations/sheets"
+	"meeting-bot/internal/notifier"
 	"meeting-bot/internal/platform/clock"
 	"meeting-bot/internal/platform/logger"
 	"meeting-bot/internal/repository/postgres"
@@ -36,9 +37,11 @@ func buildContainer() (*App, error) {
 	calendarClient := calendar.New(cfg)
 	tg := telegram.New(cfg, log, clk, repo, repo, repo, sheetsClient, calendarClient)
 	httpServer := apphttp.NewServer(cfg, log, tg)
+	notif := notifier.New(repo, repo, clk, tg, log)
 
 	return &App{
 		httpServer: httpServer,
 		telegram:   tg,
+		notifier:   notif,
 	}, nil
 }

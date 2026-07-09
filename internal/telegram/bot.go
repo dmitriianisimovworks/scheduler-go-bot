@@ -186,6 +186,17 @@ func (b *Bot) ProcessUpdate(update tele.Update) {
 	b.bot.ProcessUpdate(update)
 }
 
+// SendReminder pushes a message to a user outside of any incoming update
+// (e.g. a scheduled meeting reminder), unlike normal handlers which reply
+// within a tele.Context.
+func (b *Bot) SendReminder(telegramID int64, text string) error {
+	if b.bot == nil {
+		return fmt.Errorf("telegram bot is not ready")
+	}
+	_, err := b.bot.Send(tele.ChatID(telegramID), text)
+	return err
+}
+
 func (b *Bot) initButtons() {
 	b.btnUseName = tele.Btn{Unique: "profile_use_name", Text: "✅ Использовать"}
 	b.btnEnterName = tele.Btn{Unique: "profile_enter_name", Text: "✏️ Ввести другое"}

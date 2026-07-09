@@ -29,4 +29,6 @@ type MeetingRepository interface {
 	ListByDateRange(ctx context.Context, from time.Time, to time.Time) ([]domain.Meeting, error)
 	Cancel(ctx context.Context, meetingID int64, requesterID int64) (domain.Meeting, error)
 	HasConflict(ctx context.Context, participantIDs []int64, startsAt time.Time, endsAt time.Time) (bool, error)
+	IsReminderSent(ctx context.Context, meetingID int64, threshold string) (bool, error)
+	MarkReminderSent(ctx context.Context, meetingID int64, threshold string) error
 }

@@ -117,6 +117,12 @@ func (r *Repository) ensureSchema(ctx context.Context) error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS meeting_reminders (
+			meeting_id BIGINT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+			threshold TEXT NOT NULL,
+			sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (meeting_id, threshold)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_meetings_starts_at ON meetings (starts_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_meetings_ends_at ON meetings (ends_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_meeting_participants_user_id ON meeting_participants (user_id)`,
@@ -428,6 +434,22 @@ func (r *Repository) Cancel(ctx context.Context, meetingID int64, requesterID in
 		return domain.Meeting{}, err
 	}
 	return meeting, nil
+}
+
+func (r *Repository) IsReminderSent(ctx context.Context, meetingID int64, threshold string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM meeting_reminders WHERE meeting_id = $1 AND threshold = $2)
+	`, meetingID, threshold).Scan(&exists)
+	return exists, err
+}
+
+func (r *Repository) MarkReminderSent(ctx context.Context, meetingID int64, threshold string) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO meeting_reminders (meeting_id, threshold) VALUES ($1, $2)
+		ON CONFLICT (meeting_id, threshold) DO NOTHING
+	`, meetingID, threshold)
+	return err
 }
 
 func (r *Repository) HasConflict(ctx context.Context, participantIDs []int64, startsAt time.Time, endsAt time.Time) (bool, error) {

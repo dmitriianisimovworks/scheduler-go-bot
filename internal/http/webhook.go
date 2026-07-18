@@ -13,7 +13,10 @@ import (
 
 func registerWebhookRoutes(router chi.Router, cfg config.Config, log *logger.Logger, telegram TelegramProcessor) {
 	router.Post("/telegram/webhook", func(w http.ResponseWriter, r *http.Request) {
-		if cfg.TelegramWebhookSecret != "" && r.Header.Get("X-Telegram-Bot-Api-Secret-Token") != cfg.TelegramWebhookSecret {
+		// Fail closed: an unset secret means the endpoint accepts nothing,
+		// never everything. Without this the handler would trust any POST and
+		// let a forged update spoof any telegram_id — including an admin's.
+		if cfg.TelegramWebhookSecret == "" || r.Header.Get("X-Telegram-Bot-Api-Secret-Token") != cfg.TelegramWebhookSecret {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 
 	"meeting-bot/internal/config"
 	apphttp "meeting-bot/internal/http"
@@ -25,6 +26,14 @@ type TelegramRunner interface {
 
 func buildContainer() (*App, error) {
 	cfg := config.Load()
+
+	// The bot receives updates only via webhook, so an empty secret leaves the
+	// public /telegram/webhook endpoint unauthenticated. Refuse to boot rather
+	// than run in that state.
+	if cfg.TelegramWebhookSecret == "" {
+		return nil, fmt.Errorf("TELEGRAM_WEBHOOK_SECRET is required: without it the webhook endpoint is unauthenticated")
+	}
+
 	log := logger.New(cfg.AppEnv)
 	clk := clock.New()
 	ctx := context.Background()

@@ -53,8 +53,8 @@ make compose-up        # docker compose up --build -d
 | `APP_TIMEZONE` | Таймзона встреч, например `Europe/Moscow` |
 | `APP_DOMAIN` | Домен сервера (для webhook и SSL) |
 | `TELEGRAM_BOT_TOKEN` | Токен бота от @BotFather |
-| `TELEGRAM_WEBHOOK_URL` | `https://<домен>/webhook` — бот работает через webhook, без него обновления приходить не будут |
-| `TELEGRAM_WEBHOOK_SECRET` | Любая случайная строка — защита webhook-эндпоинта |
+| `TELEGRAM_WEBHOOK_URL` | `https://<домен>/telegram/webhook` — бот работает через webhook, без него обновления приходить не будут |
+| `TELEGRAM_WEBHOOK_SECRET` | Обязательно на проде: случайная строка, защищает webhook-эндпоинт от подделки апдейтов. Если пусто — эндпоинт принимает любые запросы |
 | `POSTGRES_*` | Хост `postgres` (имя сервиса в compose), имя БД, пользователь, пароль |
 | `GOOGLE_SHEETS_ID` | ID таблицы из её URL |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | JSON сервисного аккаунта (таблицу нужно расшарить на его email) |
@@ -83,5 +83,5 @@ Telegram принимает webhook только по HTTPS. На сервере
 
 ### 5. Проверка после запуска
 
-- `curl https://<домен>/health` — сервис жив.
+- `curl https://<домен>/healthz` — сервис жив.
 - Написать боту `/start` — должен ответить и предложить регистрацию.
